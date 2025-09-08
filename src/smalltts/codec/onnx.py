@@ -38,11 +38,11 @@ class Decoder(_ONNXRunner):
 
     def decode(self, latents: torch.Tensor) -> torch.Tensor:
         """
-        Args:
+        args:
             latents (torch.Tensor): encoded latent representations
                 - dtype: float32
                 - shape: (batch, T, 64)
-        Returns:
+        returns:
             torch.Tensor: audio
                 - dtype: float32
                 - shape: (batch, 1, T)
@@ -60,11 +60,11 @@ class Encoder(_ONNXRunner):
 
     def encode(self, audio: torch.Tensor) -> torch.Tensor:
         """
-        Args:
+        args:
             audio (torch.Tensor): 1 channel, 24kHz audio
                 - dtype: float32
                 - shape: (batch, 1, time)
-        Returns:
+        returns:
             torch.Tensor: latents
                 - dtype: float32
                 - shape: (batch, T, 64)
