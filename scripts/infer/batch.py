@@ -17,8 +17,7 @@ def load_audio(paths):
         if y.ndim == 2:
             y = y.mean(axis=1)
         x = torch.from_numpy(y).view(1, -1)
-        if sr != 24_000:
-            x = resample_hq(x, sr, 24_000)
+        x = resample_hq(x, sr, 24_000)
         xs.append(x.to(torch.float32))
     return xs
 

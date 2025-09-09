@@ -1,11 +1,9 @@
 import math
-from typing import Iterable, List, Optional, Any
+from typing import Any, Iterable, List, Optional
 
 import numpy as np
 import onnxruntime as ort
 import torch
-from beartype import beartype
-from jaxtyping import Float, jaxtyped
 from torch import Tensor
 from torch.nn.utils.rnn import pad_sequence
 
@@ -33,6 +31,7 @@ class SmallTTS:
         batch_size = len(conditionings)
         assert batch_size == len(transcriptions) and batch_size == len(texts)
         latent_dim = conditionings[0].shape[1]
+
         def to_tokens(xs):
             if len(xs) == 0:
                 return []
@@ -46,7 +45,9 @@ class SmallTTS:
         expanded_conds: List[Tensor] = []
         for i, cond in enumerate(conditionings):
             num_phonemes = len(cond_tokens[i])
-            latents_per_phoneme = float(cond.shape[0]) / float(num_phonemes)
+            latents_per_phoneme = (
+                float(cond.shape[0]) / float(num_phonemes) * 1.25
+            )  # experimental
             estimated_latents_length = int(
                 math.ceil(latents_per_phoneme * len(new_tokens[i]))
             )
