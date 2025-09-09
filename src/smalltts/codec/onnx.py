@@ -1,9 +1,10 @@
 # ONNX exports from Microsoft's VibeVoice (MIT) (https://github.com/microsoft/VibeVoice)
 
+from typing import Iterable, Optional
+
 import numpy as np
 import onnxruntime as ort
 import torch
-from typing import Iterable, Optional
 
 
 def _default_providers() -> list[str]:
@@ -80,13 +81,3 @@ if __name__ == "__main__":
     print("latents shape:", tuple(latents.shape))
     recon_audio = decoder.decode(latents)
     print("reconstructed audio shape:", tuple(recon_audio.shape))
-
-
-if __name__ == "__main__":
-    dummy_audio = torch.randn(1, 1, 24_000, dtype=torch.float32)
-    encoder = Encoder()
-    decoder = Decoder()
-    latents = encoder.encode(dummy_audio)
-    print("latents shape:", latents.shape)
-    recon_audio = decoder.decode(latents)
-    print("reconstructed audio shape:", recon_audio.shape)
