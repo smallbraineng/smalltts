@@ -3,3 +3,4 @@
 assets/*
 **/__pycache__
 .DS_Store
+.cursorrules
