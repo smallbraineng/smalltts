@@ -1,13 +1,14 @@
 [project]
 name = "smalltts"
 version = "0.1.0"
-description = "Add your description here"
+description = "superfast text-to-speech in any voice"
 readme = "README.md"
 authors = [
-    { name = "smallbraingames", email = "smallbraindev@gmail.com" }
+    { name = "small brain", email = "smallbraindev@gmail.com" }
 ]
 requires-python = ">=3.10.12"
 dependencies = [
+    "accelerate>=1.10.1",
     "beartype>=0.21.0",
     "einops>=0.8.1",
     "inflect>=7.5.0",
@@ -22,7 +23,7 @@ dependencies = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.ruff]            # ← Ruff looks here
+[tool.ruff]
 extend-ignore = ["F722"]
 
 [tool.pyright]
