@@ -9,11 +9,13 @@ import torch
 
 def _default_providers() -> list[str]:
     av = set(ort.get_available_providers())
-    return (
-        ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        if "CUDAExecutionProvider" in av
-        else ["CPUExecutionProvider"]
-    )
+    providers = []
+
+    if "CUDAExecutionProvider" in av:
+        providers.append("CUDAExecutionProvider")
+
+    providers.append("CPUExecutionProvider")
+    return providers
 
 
 class _ONNXRunner:
