@@ -14,15 +14,15 @@ from smalltts.models.discriminator import Discriminator
 from smalltts.models.sv.model import SV
 from smalltts.train.utils import apply_noise, get_alpha_sigma, get_mask, get_random_cond
 
-BATCH_SIZE = 14
-NUM_WORKERS = 4
+BATCH_SIZE = 2
+NUM_WORKERS = 0
 NUM_STEPS = 40_000
 SCORER_UPDATES = 5
 NUM_SAVE_STEPS = 800
 TIMESTEPS = [1.0, 1.0, 0.75, 0.50, 0.25]
-TEACHER_CHECKPOINT = "teacher_checkpoints/checkpoint_latest.pt"
-ASR_CHECKPOINT = "asr_checkpoints/checkpoint_latest.pt"
-SV_CHECKPOINT = "sv_checkpoints/checkpoint_latest.pt"
+TEACHER_CHECKPOINT = "assets/teacher_checkpoints/checkpoint_latest.pt"
+ASR_CHECKPOINT = "assets/asr_checkpoints/checkpoint_latest.pt"
+SV_CHECKPOINT = "assets/sv_checkpoints/checkpoint_latest.pt"
 LOAD_FROM_CHECKPOINT: str | None = None
 
 
@@ -412,7 +412,7 @@ if __name__ == "__main__":
 
         if accelerator.is_main_process and step % NUM_SAVE_STEPS == 0 and step > 1:
             print("saving checkpoint")
-            accelerator.save_state("dmd_checkpoints/checkpoint_latest")
+            accelerator.save_state("assets/dmd_checkpoints/checkpoint_latest")
             torch.save(
                 {
                     "student_model": accelerator.unwrap_model(student).state_dict(),
@@ -423,5 +423,5 @@ if __name__ == "__main__":
                         discriminator
                     ).state_dict(),
                 },
-                "dmd_checkpoints/checkpoint_latest.pt",
+                "assets/dmd_checkpoints/checkpoint_latest.pt",
             )

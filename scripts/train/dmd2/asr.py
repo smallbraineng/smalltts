@@ -83,12 +83,12 @@ if __name__ == "__main__":
 
         if accelerator.is_main_process and step % NUM_SAVE_STEPS == 0 and step > 0:
             print("saving checkpoint")
-            accelerator.save_state("conformer_checkpoints/checkpoint_latest")
+            accelerator.save_state("assets/asr_checkpoints/checkpoint_latest")
             torch.save(
                 {
                     "model": accelerator.unwrap_model(asr).state_dict(),
                 },
-                "conformer_checkpoints/checkpoint_latest.pt",
+                "assets/asr_checkpoints/checkpoint_latest.pt",
             )
 
         del batch
