@@ -53,7 +53,7 @@ class Backbone(nn.Module):
         t: Float[Tensor, " batch"],
         get_stacked_transformer_features: bool = False,
     ):
-        # [batch, latent_length, 1_024]
+        # [batch, latent_length, 64]
         phoneme_embedding = self.phoneme_embedding(phonemes, phonemes_mask)
         time_embedding = self.time_embedding(t)
 
