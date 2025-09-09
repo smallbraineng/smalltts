@@ -1,5 +1,5 @@
 import math
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Any
 
 import numpy as np
 import onnxruntime as ort
@@ -24,18 +24,24 @@ class SmallTTS:
         self.session = ort.InferenceSession(path, providers=provider)
         self.out_name = self.session.get_outputs()[0].name
 
-    @jaxtyped(typechecker=beartype)
     def forward(
         self,
-        conditionings: List[Float[Tensor, "sequence_length 64"]],
-        transcriptions: List[str],
-        texts: List[str],
+        conditionings: List[Tensor],
+        transcriptions: List[Any],
+        texts: List[Any],
     ) -> List[Tensor]:
         batch_size = len(conditionings)
         assert batch_size == len(transcriptions) and batch_size == len(texts)
         latent_dim = conditionings[0].shape[1]
-        cond_tokens = [get_token_ids(s) for s in transcriptions]
-        new_tokens = [get_token_ids(s) for s in texts]
+        def to_tokens(xs):
+            if len(xs) == 0:
+                return []
+            if isinstance(xs[0], str):
+                return [get_token_ids(s) for s in xs]
+            return [list(map(int, t)) for t in xs]
+
+        cond_tokens = to_tokens(transcriptions)
+        new_tokens = to_tokens(texts)
         estimated_lengths = []
         expanded_conds: List[Tensor] = []
         for i, cond in enumerate(conditionings):
