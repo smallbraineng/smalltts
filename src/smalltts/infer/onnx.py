@@ -1,4 +1,3 @@
-import math
 from typing import Any, Iterable, List, Optional
 
 import numpy as np
@@ -15,12 +14,15 @@ from smalltts.train.utils import get_mask
 class SmallTTS:
     def __init__(
         self,
-        path: str = "assets/e2e/e2e.onnx",
+        e2e_path: str = "assets/e2e/e2e.onnx",
+        length_path: str = "assets/length/length.onnx",
         providers: Optional[Iterable[str]] = None,
     ) -> None:
         provider = list(providers) if providers is not None else default_providers()
-        self.session = ort.InferenceSession(path, providers=provider)
-        self.out_name = self.session.get_outputs()[0].name
+        self.e2e_session = ort.InferenceSession(e2e_path, providers=provider)
+        self.e2e_out_name = self.e2e_session.get_outputs()[0].name
+        self.length_session = ort.InferenceSession(length_path, providers=provider)
+        self.length_out_name = self.length_session.get_outputs()[0].name
 
     def forward(
         self,
@@ -41,26 +43,60 @@ class SmallTTS:
 
         cond_tokens = to_tokens(transcriptions)
         new_tokens = to_tokens(texts)
-        estimated_lengths = []
+
+        phonemes = [
+            torch.tensor(cond_tokens[i] + new_tokens[i], dtype=torch.int64)
+            for i in range(batch_size)
+        ]
+        phonemes_lengths = torch.tensor([len(p) for p in phonemes], dtype=torch.int64)
+        padded_phonemes = pad_sequence(phonemes, batch_first=True, padding_value=0)
+        phonemes_mask = get_mask(
+            batch_size,
+            padded_phonemes.shape[1],
+            phonemes_lengths,
+            phonemes_lengths.device,
+        )
+        conditionings_lengths = torch.tensor(
+            [len(cond) for cond in conditionings], dtype=torch.int64
+        )
+        padded_conditionings = pad_sequence(
+            conditionings, batch_first=True, padding_value=0
+        )
+        conditionings_mask = get_mask(
+            batch_size,
+            padded_conditionings.shape[1],
+            conditionings_lengths,
+            conditionings_lengths.device,
+        )
+
+        length_out = self.length_session.run(
+            [self.length_out_name],
+            {
+                "phonemes": padded_phonemes.numpy().astype(np.int64, copy=False),
+                "phonemes_mask": phonemes_mask.cpu()
+                .numpy()
+                .astype(np.bool_, copy=False),
+                "latents": padded_conditionings.numpy().astype(np.float32, copy=False),
+                "mask": conditionings_mask.cpu().numpy().astype(np.bool, copy=False),
+            },
+        )[0]
+        estimated_lengths = (
+            torch.expm1(torch.from_numpy(length_out)).round().to(dtype=torch.int)
+        )
+
         expanded_conds: List[Tensor] = []
         for i, cond in enumerate(conditionings):
-            num_phonemes = len(cond_tokens[i])
-            latents_per_phoneme = (
-                float(cond.shape[0]) / float(num_phonemes) * 1.25
-            )  # experimental
-            estimated_latents_length = int(
-                math.ceil(latents_per_phoneme * len(new_tokens[i]))
-            )
+            estimated_latents_length = int(estimated_lengths[i])
             expanded_cond = torch.cat(
                 [
                     cond,
                     torch.zeros(
-                        (estimated_latents_length, latent_dim), device=cond.device
+                        (estimated_latents_length - cond.shape[0], latent_dim),
+                        device=cond.device,
                     ),
                 ],
                 dim=0,
             )
-            estimated_lengths.append(estimated_latents_length)
             expanded_conds.append(expanded_cond)
 
         latents_lengths = torch.tensor(
@@ -92,8 +128,8 @@ class SmallTTS:
             dtype=torch.float32,
         )
 
-        out = self.session.run(
-            [self.out_name],
+        out = self.e2e_session.run(
+            [self.e2e_out_name],
             {
                 "cond": padded_conditionings.numpy().astype(np.float32, copy=False),
                 "mask": mask.cpu().numpy().astype(np.bool_, copy=False),

@@ -1,25 +1,29 @@
 import argparse
-import subprocess
 import time
-from pathlib import Path
 
 import numpy as np
+import sounddevice as sd
 import soundfile as sf
 import torch
+from rich.console import Console
+from rich.prompt import Prompt
 
+from smalltts.assets.ensure import ensure_assets
 from smalltts.codec.onnx import Encoder
 from smalltts.data.phonemization.phonemes import get_token_ids
 from smalltts.infer.onnx import SmallTTS
 from smalltts.infer.utils import resample_hq
 
-
-def main():
+if __name__ == "__main__":
+    ensure_assets(["codec", "e2e", "tryme"])
     ap = argparse.ArgumentParser()
     ap.add_argument("--wav", type=str)
     ap.add_argument("--transcription", type=str)
     args = ap.parse_args()
-    Path("out").mkdir(exist_ok=True)
-    print("loading model")
+    console = Console()
+    console.print("smalltts interactive", style="bold magenta")
+    console.print("type and press enter. ctrl-c to exit.", style="dim")
+    console.print("loading model", style="yellow")
     t0 = time.perf_counter()
     model = SmallTTS()
     if args.wav and args.transcription:
@@ -34,36 +38,25 @@ def main():
     else:
         lat = torch.from_numpy(np.load("assets/tryme/latents.npy")).float()
         toks = np.load("assets/tryme/tokens.npy").tolist()
-    i = 1
     first = True
     while True:
-        try:
-            s = input(">> ").strip()
-            if not s:
-                continue
-            st = time.perf_counter()
+        s = Prompt.ask("[bold cyan]>>[/]").strip()
+        if not s:
+            continue
+        st = time.perf_counter()
+        with console.status("[bold green]generating...", spinner="dots"):
             y = model([lat], [toks], [s])[0]
-            dt = time.perf_counter() - st
-            dur = y.shape[-1] / 24_000.0
-            rtf = dur / dt if dt > 0 else 0.0
-            p = Path(f"out/interactive_{i}.wav")
-            sf.write(str(p), y.squeeze(0).t().numpy(), 24_000, subtype="PCM_16")
-            if first:
-                print(
-                    f"gen {dt:.2f}s (+{time.perf_counter() - t0 - dt:.2f}s warmup), {rtf:.1f}x rt"
-                )
-                first = False
-            else:
-                print(f"gen {dt:.2f}s, {rtf:.1f}x rt")
-            try:
-                subprocess.run(["afplay", str(p)], check=False)
-            except Exception:
-                pass
-            i += 1
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
-
-
-if __name__ == "__main__":
-    main()
+        dt = time.perf_counter() - st
+        dur = y.shape[-1] / 24_000.0
+        rtf = dur / dt if dt > 0 else 0.0
+        if first:
+            console.print(
+                f"gen {dt:.2f}s (+{time.perf_counter() - t0 - dt:.2f}s warmup), {rtf:.1f}x rt",
+                style="green",
+            )
+            first = False
+        else:
+            console.print(f"gen {dt:.2f}s, {rtf:.1f}x rt", style="green")
+        a = y.squeeze().cpu().numpy()
+        sd.play(a, 24_000)
+        sd.wait()

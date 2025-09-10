@@ -5,10 +5,14 @@ import numpy as np
 import soundfile as sf
 import torch
 
+from smalltts.assets.ensure import ensure_assets
 from smalltts.infer.onnx import SmallTTS
 
 if __name__ == "__main__":
     Path("out").mkdir(exist_ok=True)
+
+    ensure_assets(["tryme", "codec", "e2e"])
+
     print("loading model")
     model = SmallTTS()
     print("generating")
