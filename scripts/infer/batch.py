@@ -4,6 +4,7 @@ from pathlib import Path
 import soundfile as sf
 import torch
 
+from smalltts.assets.ensure import ensure_assets
 from smalltts.codec.onnx import Encoder
 from smalltts.infer.onnx import SmallTTS
 from smalltts.infer.utils import resample_hq
@@ -22,16 +23,18 @@ def load_audio(paths):
     return xs
 
 
-def main():
+if __name__ == "__main__":
+    ensure_assets(["codec", "e2e", "test_audio"])
     td = Path("assets/test_audio")
     with open(td / "transcriptions.json") as f:
         items = json.load(f)
     files = [td / it["filename"] for it in items]
     trans = [it["transcription"] for it in items]
     texts = [
-        "Hello world, I am small tts, and I am talking",
-        "I can clone any voice and emotion",
-        "I have an ONNX export and run very fast",
+        "Hello world, I am small tts, and I am talking!",
+        "I can clone any voice and emotion.",
+        "I have an ONNX export and run very fast.",
+        "Woah, this is awesome I can do any character!",
     ]
     outdir = Path("out")
     outdir.mkdir(parents=True, exist_ok=True)
@@ -57,7 +60,3 @@ def main():
                 subtype="PCM_16",
             )
             print(str(outdir / f"{Path(files[i + k]).stem}_gen.wav"))
-
-
-if __name__ == "__main__":
-    main()

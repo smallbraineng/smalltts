@@ -4,12 +4,13 @@ from pathlib import Path
 import soundfile as sf
 import torch
 
+from smalltts.assets.ensure import ensure_assets
 from smalltts.codec.onnx import Encoder
 from smalltts.infer.onnx import SmallTTS
 from smalltts.infer.utils import resample_hq
 
-
-def main():
+if __name__ == "__main__":
+    ensure_assets(["codec", "e2e"])
     ap = argparse.ArgumentParser()
     ap.add_argument("--wav", required=True)
     ap.add_argument("--transcription", required=True)
@@ -32,7 +33,3 @@ def main():
     y = tts([lat], [args.transcription], [args.text])[0]
     sf.write(args.out, y.squeeze(0).t().numpy(), 24_000, subtype="PCM_16")
     print(args.out)
-
-
-if __name__ == "__main__":
-    main()
