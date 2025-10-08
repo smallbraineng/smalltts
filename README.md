@@ -120,7 +120,7 @@ see `src/smalltts/infer/onnx.py` for the simplest api, or just use the scripts a
 
 ## licenses
 
-code is MIT licensed. see [LICENSE](LICENSE).
+code is licensed under CC-BY-NC. see [LICENSE](LICENSE).
 
 model weights on huggingface are licensed CC‑BY‑NA.
 
