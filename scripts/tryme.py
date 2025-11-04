@@ -11,7 +11,7 @@ from smalltts.infer.onnx import SmallTTS
 if __name__ == "__main__":
     Path("out").mkdir(exist_ok=True)
 
-    ensure_assets(["tryme", "codec", "e2e"])
+    ensure_assets(["tryme", "codec", "e2e", "length"])
 
     print("loading model")
     model = SmallTTS()
