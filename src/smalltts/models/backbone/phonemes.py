@@ -2,9 +2,8 @@
 
 import torch
 import torch.nn as nn
-from beartype import beartype
-from jaxtyping import Bool, Int, jaxtyped
-from torch import Tensor
+
+from .dit import RMSNorm
 
 
 class GRN(nn.Module):
@@ -88,42 +87,141 @@ def get_pos_embed_indices(start, length, max_pos, scale=1.0):
     return pos
 
 
-class PhonemeEmbedding(nn.Module):
-    def __init__(self, phoneme_length: int, dim: int, conv_layers: int):
-        super().__init__()
-        self.phoneme_embed = nn.Embedding(phoneme_length, dim)  # use 0 as filler token
-        self.extra_modeling = True
-        self.precompute_max_pos = 2_048
-        self.register_buffer(
-            "freqs_cis",
-            precompute_freqs_cis(dim, self.precompute_max_pos),
-            persistent=False,
-        )
-        self.convnextv2 = nn.Sequential(
-            *[ConvNeXtV2Block(dim, dim * 2) for _ in range(conv_layers)]
-        )
+def precompute_freqs_cis_complex(
+    dim: int, end: int, theta: float = 10000.0
+) -> torch.Tensor:
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+    t = torch.arange(end, device=freqs.device)
+    freqs = torch.outer(t, freqs)
+    freqs_cis = torch.complex(torch.cos(freqs), torch.sin(freqs))
+    return freqs_cis
 
-    @jaxtyped(typechecker=beartype)
-    def forward(
+
+def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+    x_ = torch.view_as_complex(x.float().reshape(*x.shape[:3], -1, 2))
+    x_ = x_ * freqs_cis[..., None, :]
+    x_ = torch.view_as_real(x_).reshape(x.shape)
+    return x_.type_as(x)
+
+
+class SelfAttention(nn.Module):
+    def __init__(
         self,
-        phonemes: Int[Tensor, "batch phoneme_length"],
-        phonemes_mask: Bool[Tensor, "batch phoneme_length"],
+        model_size: int,
+        num_heads: int,
+        is_causal: bool,
+        norm_eps: float,
     ):
-        phonemes = self.phoneme_embed(phonemes)
-        batch = phonemes.size(0)
-        seq_len = phonemes.size(1)
-        batch_start = torch.zeros((batch,), dtype=torch.long)
-        pos_idx = get_pos_embed_indices(
-            batch_start, seq_len, max_pos=self.precompute_max_pos
+        super().__init__()
+        self.num_heads = num_heads
+        self.is_causal = is_causal
+        self.wq = nn.Linear(model_size, model_size, bias=False)
+        self.wk = nn.Linear(model_size, model_size, bias=False)
+        self.wv = nn.Linear(model_size, model_size, bias=False)
+        self.wo = nn.Linear(model_size, model_size, bias=False)
+        self.gate = nn.Linear(model_size, model_size, bias=False)
+        assert model_size % num_heads == 0
+        self.q_norm = RMSNorm((num_heads, model_size // num_heads), eps=norm_eps)
+        self.k_norm = RMSNorm((num_heads, model_size // num_heads), eps=norm_eps)
+
+    def forward(
+        self, x: torch.Tensor, mask: torch.Tensor | None, freqs_cis: torch.Tensor
+    ) -> torch.Tensor:
+        batch_size, seq_len = x.shape[:2]
+        xq = self.wq(x).reshape(batch_size, seq_len, self.num_heads, -1)
+        xk = self.wk(x).reshape(batch_size, seq_len, self.num_heads, -1)
+        xv = self.wv(x).reshape(batch_size, seq_len, self.num_heads, -1)
+        gate = self.gate(x)
+        xq = self.q_norm(xq)
+        xk = self.k_norm(xk)
+        xq = apply_rotary_emb(xq, freqs_cis[:seq_len])
+        xk = apply_rotary_emb(xk, freqs_cis[:seq_len])
+        if mask is not None:
+            assert mask.ndim == 2
+            mask = mask[:, None, None]
+        output = torch.nn.functional.scaled_dot_product_attention(
+            query=xq.transpose(1, 2),
+            key=xk.transpose(1, 2),
+            value=xv.transpose(1, 2),
+            attn_mask=mask,
+            is_causal=self.is_causal,
+        ).transpose(1, 2)
+        output = output.reshape(batch_size, seq_len, -1)
+        output = output * torch.sigmoid(gate)
+        output = self.wo(output)
+        return output
+
+
+class MLP(nn.Module):
+    def __init__(self, model_size: int, intermediate_size: int):
+        super().__init__()
+        self.w1 = nn.Linear(model_size, intermediate_size, bias=False)
+        self.w3 = nn.Linear(model_size, intermediate_size, bias=False)
+        self.w2 = nn.Linear(intermediate_size, model_size, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.w2(torch.nn.functional.silu(self.w1(x)) * self.w3(x))
+
+
+class EncoderTransformerBlock(nn.Module):
+    def __init__(
+        self,
+        model_size: int,
+        num_heads: int,
+        intermediate_size: int,
+        is_causal: bool,
+        norm_eps: float,
+    ):
+        super().__init__()
+        self.attention = SelfAttention(
+            model_size=model_size,
+            num_heads=num_heads,
+            is_causal=is_causal,
+            norm_eps=norm_eps,
         )
-        pos_embed = self.freqs_cis[pos_idx]  # type: ignore
-        phonemes = phonemes + pos_embed
-        phonemes = phonemes.masked_fill_(
-            ~phonemes_mask.unsqueeze(-1).expand(-1, -1, phonemes.size(-1)), 0.0
-        )
-        for block in self.convnextv2:
-            phonemes = block(phonemes)
-            phonemes = phonemes.masked_fill_(
-                ~phonemes_mask.unsqueeze(-1).expand(-1, -1, phonemes.size(-1)), 0.0
+        self.mlp = MLP(model_size=model_size, intermediate_size=intermediate_size)
+        self.attention_norm = RMSNorm(model_size, norm_eps)
+        self.mlp_norm = RMSNorm(model_size, norm_eps)
+
+    def forward(
+        self, x: torch.Tensor, mask: torch.Tensor | None, freqs_cis: torch.Tensor
+    ) -> torch.Tensor:
+        x = x + self.attention(self.attention_norm(x), mask, freqs_cis)
+        x = x + self.mlp(self.mlp_norm(x))
+        return x
+
+
+class TextEncoder(nn.Module):
+    def __init__(
+        self,
+        vocab_size: int,
+        model_size: int,
+        num_layers: int,
+        num_heads: int,
+        intermediate_size: int,
+        norm_eps: float,
+    ):
+        super().__init__()
+        self.text_embedding = nn.Embedding(vocab_size, model_size)
+        self.blocks = nn.ModuleList()
+        for _ in range(num_layers):
+            block = EncoderTransformerBlock(
+                model_size=model_size,
+                num_heads=num_heads,
+                intermediate_size=intermediate_size,
+                is_causal=False,
+                norm_eps=norm_eps,
             )
-        return phonemes
+            self.blocks.append(block)
+        self.head_dim = model_size // num_heads
+
+    def forward(
+        self, input_ids: torch.Tensor, mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        x = self.text_embedding(input_ids)
+        freqs_cis = precompute_freqs_cis_complex(self.head_dim, input_ids.shape[1]).to(
+            x.device
+        )
+        for block in self.blocks:
+            x = block(x, mask, freqs_cis)
+        return x

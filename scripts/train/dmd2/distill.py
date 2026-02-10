@@ -9,10 +9,10 @@ from tqdm import tqdm
 
 from smalltts.data.dummy import get_dummy_dataloader
 from smalltts.models.asr import ASR
-from smalltts.models.backbone.model import Backbone
+from smalltts.models.backbone.model import DiTModel
 from smalltts.models.discriminator import Discriminator
 from smalltts.models.sv.model import SV
-from smalltts.train.utils import apply_noise, get_alpha_sigma, get_mask, get_random_cond
+from smalltts.train.utils import apply_noise, get_alpha_sigma, get_mask
 
 BATCH_SIZE = 2
 NUM_WORKERS = 0
@@ -37,19 +37,26 @@ def set_grad(model, set: bool):
 
 def load_from_checkpoint(model, checkpoint_path: str, device: torch.device):
     ckpt = torch.load(checkpoint_path, map_location=device)
-    state_dict = ckpt["model"]
-    if any(key.startswith("module.") for key in state_dict.keys()):
-        state_dict = {
-            key.replace("module.", "", 1).replace("_orig_mod.", "", 1): value
-            for key, value in state_dict.items()
-        }
-    model.load_state_dict(state_dict)
+    if isinstance(ckpt, dict) and "model" in ckpt:
+        state_dict = ckpt["model"]
+    else:
+        state_dict = ckpt
+    cleaned = {}
+    for k, v in state_dict.items():
+        if k in ("initted", "step"):
+            continue
+        for prefix in ("module.", "_orig_mod.", "ema_model.", "online_model."):
+            while k.startswith(prefix):
+                k = k[len(prefix) :]
+        cleaned[k] = v
+    model.load_state_dict(cleaned)
 
 
 def get_x_pred(
-    model: Backbone,
+    model: DiTModel,
     x_t: Float[Tensor, "batch sequence_length latent_dim"],
-    cond: Float[Tensor, "batch sequence_length latent_dim"],
+    ref_latents: Float[Tensor, "batch ref_seq latent_dim"],
+    ref_latents_lengths: Int64[Tensor, " batch"],
     mask: Bool[Tensor, "batch sequence_length"],
     phonemes: Int64[Tensor, "batch phoneme_length"],
     phonemes_mask: Bool[Tensor, "batch phoneme_length"],
@@ -62,7 +69,8 @@ def get_x_pred(
     if get_stacked_transformer_features:
         velocity, stacked_features = model(
             x_t,
-            cond,
+            ref_latents,
+            ref_latents_lengths,
             mask,
             phonemes,
             phonemes_mask,
@@ -70,13 +78,22 @@ def get_x_pred(
             get_stacked_transformer_features=True,
         )
     else:
-        velocity = model(x_t, cond, mask, phonemes, phonemes_mask, t)
+        velocity = model(
+            x_t,
+            ref_latents,
+            ref_latents_lengths,
+            mask,
+            phonemes,
+            phonemes_mask,
+            t,
+        )
     if cfg:
         velocity += 2 * (
             velocity
             - model(
                 x_t,
-                cond,
+                ref_latents,
+                ref_latents_lengths,
                 mask,
                 torch.zeros_like(phonemes),
                 torch.zeros_like(phonemes_mask).to(dtype=torch.bool),
@@ -97,12 +114,12 @@ if __name__ == "__main__":
     train_loader = get_dummy_dataloader(BATCH_SIZE, NUM_WORKERS)
     accelerator = Accelerator()
 
-    student = Backbone(64).to(accelerator.device)
-    student_scorer = Backbone(64).to(accelerator.device)
-    teacher = Backbone(64).to(accelerator.device)
+    student = DiTModel(64).to(accelerator.device)
+    student_scorer = DiTModel(64).to(accelerator.device)
+    teacher = DiTModel(64).to(accelerator.device)
     discriminator = Discriminator(64).to(accelerator.device)
     asr = ASR(64).to(accelerator.device)
-    sv = SV(192, ASR(64)).to(accelerator.device)
+    sv = SV(192).to(accelerator.device)
     ctc_loss = CTCLoss(blank=0, zero_infinity=True)
 
     load_from_checkpoint(teacher, TEACHER_CHECKPOINT, accelerator.device)
@@ -169,7 +186,6 @@ if __name__ == "__main__":
     if LOAD_FROM_CHECKPOINT is not None:
         print("loading from checkpoint", LOAD_FROM_CHECKPOINT)
         accelerator.load_state(LOAD_FROM_CHECKPOINT)
-        # Get step count from optimizer's state
         current_step = 0
         for group in student_optimizer.state_dict()["state"].values():
             if "step" in group:
@@ -183,7 +199,6 @@ if __name__ == "__main__":
         latents = batch["latents"].to(accelerator.device)
         latents_lengths = batch["latents_lengths"].to(accelerator.device)
         batch_size = latents.shape[0]
-        cond, cond_mask = get_random_cond(latents, latents_lengths, accelerator.device)
         mask = get_mask(
             batch_size, latents.shape[1], latents_lengths, accelerator.device
         )
@@ -192,9 +207,17 @@ if __name__ == "__main__":
         phonemes_mask = get_mask(
             batch_size, phonemes.shape[1], phonemes_lengths, accelerator.device
         )
-        valid = mask.unsqueeze(-1).expand(-1, -1, 64) * ~cond_mask
+        ref_latents = batch["ref_latents"].to(accelerator.device)
+        ref_latents_lengths = batch["ref_latents_lengths"].to(accelerator.device)
 
-        # Train student
+        with torch.inference_mode():
+            _teacher = accelerator.unwrap_model(teacher)
+            ref_seq, ref_mask = _teacher.style_encoder(ref_latents, ref_latents_lengths)
+        ref_seq = ref_seq.clone()
+        ref_mask = ref_mask.clone()
+
+        valid = mask.unsqueeze(-1).expand(-1, -1, 64)
+
         student_timestep_indices = torch.randint(
             0, len(TIMESTEPS) - 1, (batch_size,), device=accelerator.device
         )
@@ -202,16 +225,14 @@ if __name__ == "__main__":
             [TIMESTEPS[int(i.item())] for i in student_timestep_indices],
             device=accelerator.device,
         )
-        z_prev, _ = apply_noise(
-            latents,
-            student_timesteps_prev,
-        )
+        z_prev, _ = apply_noise(latents, student_timesteps_prev)
         student.eval()
         with torch.inference_mode():
             x_0_prev: Tensor = get_x_pred(
                 student,
                 z_prev,
-                cond,
+                ref_latents,
+                ref_latents_lengths,
                 mask,
                 phonemes,
                 phonemes_mask,
@@ -224,12 +245,12 @@ if __name__ == "__main__":
             [TIMESTEPS[int(i.item() + 1)] for i in student_timestep_indices],
             device=accelerator.device,
         )
-        x_0_prev = x_0_prev * ~cond_mask + cond * cond_mask  # "fill in" x_0
         z, _ = apply_noise(x_0_prev, student_timesteps)
-        x_0 = get_x_pred(
+        x_0: Tensor = get_x_pred(
             student,
             z,
-            cond,
+            ref_latents,
+            ref_latents_lengths,
             mask,
             phonemes,
             phonemes_mask,
@@ -237,18 +258,16 @@ if __name__ == "__main__":
             cfg=False,
             get_stacked_transformer_features=False,
         )  # type: ignore
-        x_0: Tensor = x_0
-        x_0 = x_0 * ~cond_mask + cond * cond_mask  # "fill in" x_0
 
         timesteps = torch.rand(batch_size).to(accelerator.device)
         x_t, _ = apply_noise(x_0, timesteps)
 
-        # Compute DMD & discriminator loss
         with torch.inference_mode():
             p_real = x_0 - get_x_pred(
                 teacher,
                 x_t,
-                cond,
+                ref_latents,
+                ref_latents_lengths,
                 mask,
                 phonemes,
                 phonemes_mask,
@@ -260,7 +279,8 @@ if __name__ == "__main__":
             x_pred_fake, stacked_transformer_features_fake = get_x_pred(
                 student_scorer,
                 x_t,
-                cond,
+                ref_latents,
+                ref_latents_lengths,
                 mask,
                 phonemes,
                 phonemes_mask,
@@ -271,8 +291,6 @@ if __name__ == "__main__":
             p_fake = x_0 - x_pred_fake  # type: ignore
             p_real = p_real * valid
             p_fake = p_fake * valid
-            ## Some weirdness, should there be an extra factor of alpha_t here? The math in DMDSpeech Appendix seems off
-            # Right now, we follow DMD2 from the repo (https://github.com/tianweiy/DMD2/blob/8d8fa55633d47cfb81bbc7a892e7248f9518763f/main/sd_guidance.py#L235)
             grad = (p_real - p_fake) / torch.abs(p_real).mean(dim=[1, 2], keepdim=True)
             grad = torch.nan_to_num(grad)
             grad_magnitude = torch.norm(grad, p=2, dim=[1, 2])
@@ -287,7 +305,8 @@ if __name__ == "__main__":
         discriminator_logits = discriminator(
             stacked_transformer_features_fake,
             x_t,
-            cond,
+            ref_seq,
+            ref_mask,
             mask,
             phonemes,
             timesteps,
@@ -309,7 +328,6 @@ if __name__ == "__main__":
         lambda_asr = 1 if step > 5_000 else 0.0
         lambda_sv = 1 if step > 7_000 else 0.0
 
-        # Descent
         student_optimizer.zero_grad()
         accelerator.backward(
             student_pseudo_loss
@@ -319,13 +337,13 @@ if __name__ == "__main__":
         )
         student_optimizer.step()
 
-        # Train discriminator
         set_grad(discriminator, True)
         x_real, _ = apply_noise(latents, timesteps)
         with torch.inference_mode():
             _, stacked_transformer_features_real = student_scorer(
                 x_real,
-                cond,
+                ref_latents,
+                ref_latents_lengths,
                 mask,
                 phonemes,
                 phonemes_mask,
@@ -334,7 +352,6 @@ if __name__ == "__main__":
             )
 
         discriminator.train()
-        # Stack inputs for single forward pass
         stacked_features = torch.cat(
             [
                 stacked_transformer_features_real,
@@ -344,14 +361,16 @@ if __name__ == "__main__":
         )
         x_t_det = x_t.detach()
         stacked_x = torch.cat([x_real, x_t_det], dim=0)
-        stacked_cond = torch.cat([cond, cond], dim=0)
+        stacked_ref_seq = torch.cat([ref_seq, ref_seq], dim=0)
+        stacked_ref_mask = torch.cat([ref_mask, ref_mask], dim=0)
         stacked_mask = torch.cat([mask, mask], dim=0)
         stacked_phonemes = torch.cat([phonemes, phonemes], dim=0)
         stacked_timesteps = torch.cat([timesteps, timesteps], dim=0)
         stacked_logits = discriminator(
             stacked_features,
             stacked_x,
-            stacked_cond,
+            stacked_ref_seq,
+            stacked_ref_mask,
             stacked_mask,
             stacked_phonemes,
             stacked_timesteps,
@@ -366,16 +385,15 @@ if __name__ == "__main__":
         accelerator.backward(discriminator_loss)
         discriminator_optimizer.step()
 
-        # Train student scorer at 5x rate
         loss = None
         for _ in range(SCORER_UPDATES):
-            # Re-noise last step
             z, _ = apply_noise(x_0_prev, student_timesteps)
             with torch.inference_mode():
                 x_0: Tensor = get_x_pred(
                     student,
                     z,
-                    cond,
+                    ref_latents,
+                    ref_latents_lengths,
                     mask,
                     phonemes,
                     phonemes_mask,
@@ -388,7 +406,13 @@ if __name__ == "__main__":
             noised, v_target = apply_noise(x_0, timesteps)
 
             v_pred = student_scorer(
-                noised, cond, mask, phonemes, phonemes_mask, timesteps
+                noised,
+                ref_latents,
+                ref_latents_lengths,
+                mask,
+                phonemes,
+                phonemes_mask,
+                timesteps,
             )
             v_target = v_target * valid
             v_pred = v_pred * valid
@@ -397,13 +421,12 @@ if __name__ == "__main__":
             accelerator.backward(loss)
             student_scorer_optimizer.step()
 
-        # Store raw metric values
         metric_values = {
             "st_pseudo": student_pseudo_loss.item(),
             "st_gan": student_discriminator_loss.item(),
             "st_asr": student_asr_loss.item(),
             "st_sv": student_sv_loss.item(),
-            "diic_loss": discriminator_loss.item(),
+            "disc_loss": discriminator_loss.item(),
             "scorer_loss": loss.item(),  # type: ignore
             "dmd_grad_mag": grad_magnitude.mean().item(),
         }

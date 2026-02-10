@@ -9,8 +9,8 @@ from torch.nn.functional import mse_loss
 from tqdm import tqdm
 
 from smalltts.data.dummy import get_dummy_dataloader
-from smalltts.models.backbone.model import Backbone
-from smalltts.train.utils import get_alpha_sigma, get_mask, get_random_cond
+from smalltts.models.backbone.model import DiTModel
+from smalltts.train.utils import get_alpha_sigma, get_mask
 
 BATCH_SIZE = 2
 NUM_WORKERS = 0
@@ -38,7 +38,7 @@ def get_noised_latents(
 if __name__ == "__main__":
     train_loader = get_dummy_dataloader(BATCH_SIZE, NUM_WORKERS)
     accelerator = Accelerator()
-    model = Backbone(64).to(accelerator.device)
+    model = DiTModel(64).to(accelerator.device)
 
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=1e-4, betas=(0.9, 0.999), weight_decay=1e-2
@@ -90,28 +90,27 @@ if __name__ == "__main__":
         phonemes_mask[cfg_mask] = False
 
         latents = batch["latents"].to(accelerator.device)
+        ref_latents = batch["ref_latents"].to(accelerator.device)
+        ref_latents_lengths = batch["ref_latents_lengths"].to(accelerator.device)
 
         timesteps = torch.rand(batch_size).to(accelerator.device)
         noised, true_velocity = get_noised_latents(latents, timesteps)
 
-        cond, cond_mask = get_random_cond(latents, latent_lengths, accelerator.device)
         mask = get_mask(
             batch_size, latents.shape[1], latent_lengths, accelerator.device
         )
 
         velocity = model(
             noised,
-            cond,
+            ref_latents,
+            ref_latents_lengths,
             mask,
             phonemes,
             phonemes_mask,
             timesteps,
         )
 
-        valid = mask.unsqueeze(-1).expand(-1, -1, 64) * ~cond_mask
-
-        n_valid = valid.sum()
-        assert n_valid == sum(latent_lengths) * 64 - cond_mask.sum()  # sanity check
+        valid = mask.unsqueeze(-1).expand(-1, -1, 64)
 
         velocity = velocity * valid
         true_velocity = true_velocity * valid
@@ -136,4 +135,4 @@ if __name__ == "__main__":
                 "assets/teacher_checkpoints/checkpoint_latest.pt",
             )
 
-        del batch, noised, cond_mask, cond, mask, velocity, true_velocity, loss
+        del batch, noised, mask, velocity, true_velocity, loss

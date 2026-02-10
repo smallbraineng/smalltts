@@ -1,7 +1,6 @@
-from typing import Tuple
-
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from beartype import beartype
 from einops import rearrange
 from jaxtyping import Bool, Float, Int, jaxtyped
@@ -40,122 +39,90 @@ class AdaLayerNormZero_Final(nn.Module):
         return x
 
 
-class Attention(nn.Module):
-    def __init__(
-        self,
-        dim: int,
-        heads: int,
-        dim_head: int,
-        dropout: float,
-    ):
+class RMSNorm(nn.Module):
+    def __init__(self, model_size: int | tuple, eps: float):
         super().__init__()
+        self.eps = eps
+        if isinstance(model_size, int):
+            model_size = (model_size,)
+        self.weight = nn.Parameter(torch.ones(model_size))
 
-        self.dim = dim
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.weight.dim() == 1:
+            return F.rms_norm(x, self.weight.shape, self.weight, self.eps)
+        return F.rms_norm(x, (self.weight.shape[-1],), eps=self.eps) * self.weight
+
+
+class JointAttention(nn.Module):
+    def __init__(self, dim: int, heads: int, dim_head: int, dropout: float):
+        super().__init__()
         self.heads = heads
-        self.inner_dim = dim_head * heads
-        self.dropout = dropout
+        self.dim_head = dim_head
+        inner = heads * dim_head
 
-        self.to_q = nn.Linear(dim, self.inner_dim)
-        self.to_k = nn.Linear(dim, self.inner_dim)
-        self.to_v = nn.Linear(dim, self.inner_dim)
-
+        self.to_q = nn.Linear(dim, inner)
+        self.to_k_self = nn.Linear(dim, inner)
+        self.to_v_self = nn.Linear(dim, inner)
+        self.gate = nn.Linear(dim, inner, bias=False)
         self.to_out = nn.Sequential(
-            nn.Linear(self.inner_dim, dim, bias=False), nn.Dropout(dropout)
+            nn.Linear(inner, dim, bias=False), nn.Dropout(dropout)
         )
 
+        self.q_norm = RMSNorm((heads, dim_head), eps=1e-6)
+        self.k_norm = RMSNorm((heads, dim_head), eps=1e-6)
+
+    @jaxtyped(typechecker=beartype)
     def forward(
         self,
-        x: Float[Tensor, "batch sequence_length hidden_dim"],
-        mask: Bool[Tensor, "batch sequence_length"],  # True = attending to
+        x: Float[Tensor, "batch seq_len hidden_dim"],
+        k_ref: Float[Tensor, "batch heads ref_len dim_head"],
+        v_ref: Float[Tensor, "batch heads ref_len dim_head"],
+        k_text: Float[Tensor, "batch heads text_len dim_head"],
+        v_text: Float[Tensor, "batch heads text_len dim_head"],
+        mask: Bool[Tensor, "batch seq_len"],
+        ref_mask: Bool[Tensor, "batch ref_len"],
+        text_mask: Bool[Tensor, "batch text_len"],
         rope,
-    ) -> torch.Tensor:
-        batch_size = x.shape[0]
+    ) -> Float[Tensor, "batch seq_len hidden_dim"]:
+        b, n_q, h = x.shape[0], x.shape[1], self.heads
 
-        # `sample` projections.
-        query = self.to_q(x)
-        key = self.to_k(x)
-        value = self.to_v(x)
+        gate = self.gate(x)
 
-        # rope
+        q = self.to_q(x)
+        k_self, v_self = self.to_k_self(x), self.to_v_self(x)
+
+        q = self.q_norm(q.reshape(b, n_q, h, self.dim_head))
+        q = rearrange(q, "b n h d -> b h n d")
+
+        k_self = k_self.reshape(b, n_q, h, self.dim_head)
+        k_self = self.k_norm(k_self)
+        k_self = rearrange(k_self, "b n h d -> b h n d")
+        v_self = rearrange(v_self, "b n (h d) -> b h n d", h=h)
+
         freqs, xpos_scale = rope
-        q_xpos_scale, k_xpos_scale = (
+        q_scale, k_scale = (
             (xpos_scale, xpos_scale**-1.0) if xpos_scale is not None else (1.0, 1.0)
         )
-        query = apply_rotary_pos_emb(query, freqs, q_xpos_scale)  # type: ignore
-        key = apply_rotary_pos_emb(key, freqs, k_xpos_scale)  # type: ignore
+        q = apply_rotary_pos_emb(q, freqs, q_scale)
+        k_self = apply_rotary_pos_emb(k_self, freqs, k_scale)
 
-        # attention
-        query = rearrange(query, "b n (h d) -> b h n d", h=self.heads)
-        key = rearrange(key, "b n (h d) -> b h n d", h=self.heads)
-        value = rearrange(value, "b n (h d) -> b h n d", h=self.heads)
+        k = torch.cat([k_self, k_ref, k_text], dim=2)
+        v = torch.cat([v_self, v_ref, v_text], dim=2)
 
-        attn_mask = rearrange(mask, "b n -> b 1 1 n")
-        attn_mask = attn_mask.expand(
-            batch_size, self.heads, query.shape[-2], key.shape[-2]
-        )
-
-        x = torch.nn.functional.scaled_dot_product_attention(
-            query, key, value, attn_mask=attn_mask, dropout_p=0.0, is_causal=False
-        )
-
-        x = rearrange(x, "b h n d -> b n (h d)")
-        x = x.to(query.dtype)
-
-        x = self.to_out(x)
-
-        mask = mask.unsqueeze(-1)
-        x = x.masked_fill(~mask, 0.0)
-
-        return x
-
-
-class CrossAttention(nn.Module):
-    def __init__(
-        self, dim_q: int, dim_kv: int, heads: int, dim_head: int, dropout: float
-    ):
-        super().__init__()
-        self.heads = heads
-        inner = heads * dim_head
-        self.to_q = nn.Linear(dim_q, inner)
-        self.to_k = nn.Linear(dim_kv, inner)
-        self.to_v = nn.Linear(dim_kv, inner)
-        self.to_out = nn.Sequential(
-            nn.Linear(inner, dim_q, bias=False), nn.Dropout(dropout)
-        )
-
-    def forward(
-        self,
-        x_q: Float[Tensor, "b n_q d_q"],  # latent hidden states
-        x_kv: Float[Tensor, "b n_kv d_kv"],  # phoneme memory
-        key_padding_mask: Bool[
-            Tensor, "b n_kv"
-        ],  # True = attending to (same convention as your code)
-        rope_q: Tuple[Tensor, Tensor],  # RoPE for queries only
-    ) -> Tensor:
-        b, h = x_q.size(0), self.heads
-        q = self.to_q(x_q)
-        k = self.to_k(x_kv)
-        v = self.to_v(x_kv)
-
-        # RoPE on queries only (text already has its own positions from encoder)
-        freqs, xpos_scale = rope_q
-        q_xpos_scale = xpos_scale if isinstance(xpos_scale, torch.Tensor) else 1.0
-        q = apply_rotary_pos_emb(q, freqs, q_xpos_scale)  # type: ignore  # [b, n_q, h*d]
-
-        q = rearrange(q, "b n (h d) -> b h n d", h=h)
-        k = rearrange(k, "b n (h d) -> b h n d", h=h)
-        v = rearrange(v, "b n (h d) -> b h n d", h=h)
-
-        # broadcastable mask: [b, 1, n_q, n_kv]
-        attn_mask = rearrange(key_padding_mask, "b n -> b 1 1 n").expand(
-            b, h, q.size(-2), k.size(-2)
+        joint_mask = torch.cat([mask, ref_mask, text_mask], dim=1)
+        float_mask = torch.where(joint_mask, 0.0, float("-inf"))
+        attn_mask = rearrange(float_mask, "b n -> b 1 1 n").expand(
+            b, h, n_q, joint_mask.shape[1]
         )
 
         out = torch.nn.functional.scaled_dot_product_attention(
             q, k, v, attn_mask=attn_mask, dropout_p=0.0, is_causal=False
         )
-        out = rearrange(out, "b h n d -> b n (h d)")
-        return self.to_out(out)
+        out = rearrange(out, "b h n d -> b n (h d)").to(q.dtype)
+        out = out * torch.sigmoid(gate)
+        out = self.to_out(out)
+        out = out.masked_fill(~mask.unsqueeze(-1), 0.0)
+        return out
 
 
 # RoPE
@@ -195,7 +162,7 @@ def rotate_half(x):
 
 
 @autocast("cuda", enabled=False)
-def apply_rotary_pos_emb(t, freqs, scale=1):
+def apply_rotary_pos_emb(t, freqs, scale: float | torch.Tensor = 1):
     rot_dim, seq_len, orig_dtype = freqs.shape[-1], t.shape[-2], t.dtype
 
     freqs = freqs[:, -seq_len:, :]
@@ -213,40 +180,25 @@ def apply_rotary_pos_emb(t, freqs, scale=1):
 
 
 class FF(nn.Module):
-    def __init__(self, dim: int, dim_out: int, mlp_ratio: int, dropout: float):
+    def __init__(self, dim: int, dim_out: int, mlp_ratio: float, dropout: float):
         super().__init__()
         hidden_dim = int(dim * mlp_ratio)
-        self.ff = nn.Sequential(
-            nn.Sequential(nn.Linear(dim, hidden_dim), nn.GELU(approximate="tanh")),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, dim_out),
-        )
+        self.w1 = nn.Linear(dim, hidden_dim)
+        self.w3 = nn.Linear(dim, hidden_dim)
+        self.w2 = nn.Linear(hidden_dim, dim_out)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        return self.ff(x)
+        return self.w2(self.dropout(F.silu(self.w1(x)) * self.w3(x)))
 
 
 class DiTBlock(nn.Module):
-    def __init__(self, dim: int, enable_xattn: bool):
+    def __init__(self, dim: int):
         super().__init__()
-
-        self.xattn_enabled = enable_xattn
-        if self.xattn_enabled:
-            self.xattn_norm = AdaLayerNormZero(dim)
-            self.xattn = CrossAttention(
-                dim_q=dim, dim_kv=dim, heads=8, dim_head=dim // 8, dropout=0.1
-            )
-
         self.attn_norm = AdaLayerNormZero(dim)
-        self.attn = Attention(
-            dim=dim,
-            heads=8,
-            dim_head=dim // 8,
-            dropout=0.1,
-        )
-
+        self.attn = JointAttention(dim=dim, heads=8, dim_head=dim // 8, dropout=0.1)
         self.ff_norm = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
-        self.ff = FF(dim, dim, 4, 0.1)
+        self.ff = FF(dim, dim, 8 / 3, 0.1)
 
     @jaxtyped(typechecker=beartype)
     def forward(
@@ -254,24 +206,27 @@ class DiTBlock(nn.Module):
         x: Float[Tensor, "batch sequence_length hidden_dim"],
         emb: Float[Tensor, "batch hidden_dim"],
         mask: Bool[Tensor, "batch sequence_length"],
-        phoneme_mem: Float[Tensor, "batch phoneme_length phoneme_dim"],
-        phonemes_mask: Bool[Tensor, "batch phoneme_length"],
+        k_ref: Float[Tensor, "batch heads ref_len dim_head"],
+        v_ref: Float[Tensor, "batch heads ref_len dim_head"],
+        ref_mask: Bool[Tensor, "batch ref_len"],
+        k_text: Float[Tensor, "batch heads text_len dim_head"],
+        v_text: Float[Tensor, "batch heads text_len dim_head"],
+        phonemes_mask: Bool[Tensor, "batch text_len"],
         rope,
-    ):
+    ) -> Float[Tensor, "batch sequence_length hidden_dim"]:
         norm, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.attn_norm(x, emb=emb)
-        attn_output = self.attn(x=norm, mask=mask, rope=rope)
+        attn_output = self.attn(
+            x=norm,
+            k_ref=k_ref,
+            v_ref=v_ref,
+            k_text=k_text,
+            v_text=v_text,
+            mask=mask,
+            ref_mask=ref_mask,
+            text_mask=phonemes_mask,
+            rope=rope,
+        )
         x = x + gate_msa.unsqueeze(1) * attn_output
-
-        if self.xattn_enabled:
-            norm_x, gate_xattn, _, _, _ = self.xattn_norm(x, emb=emb)
-            xattn_output = self.xattn(
-                x_q=norm_x,
-                x_kv=phoneme_mem,
-                key_padding_mask=phonemes_mask,
-                rope_q=rope,
-            )
-            x = x + gate_xattn.unsqueeze(1) * xattn_output
-
         norm = self.ff_norm(x) * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
         ff_output = self.ff(norm)
         x = x + gate_mlp.unsqueeze(1) * ff_output
@@ -312,17 +267,11 @@ class InputEmbedding(nn.Module):
     def forward(
         self,
         x: Float[Tensor, "batch sequence_length hidden_dim"],
-        cond: Float[Tensor, "batch sequence_length hidden_dim"],
         mask: Bool[Tensor, "batch sequence_length"],
     ):
-        x = self.proj(torch.cat((x, cond), dim=-1))
+        x = self.proj(x)
         x = self.conv_pos_embed(x, mask) + x
         return x
-
-
-def default_cross_indices(n: int) -> list[int]:
-    idx = [0] + list(range(1, n, 2))  # 0 plus all odd layers
-    return idx[: len(idx) // 2] + idx[len(idx) // 2 + 1 :]  # remove the middle one
 
 
 class DiT(nn.Module):
@@ -334,57 +283,130 @@ class DiT(nn.Module):
         n_blocks: int,
     ):
         super().__init__()
+        self.heads = 8
+        self.dim_head = hidden_dim // self.heads
+        inner = hidden_dim
 
-        self.input_embed = InputEmbedding(latent_dim * 2, hidden_dim)
+        self.input_embed = InputEmbedding(latent_dim, hidden_dim)
         self.rotary_embed = RotaryEmbedding(64)
         self.phoneme_proj = nn.Linear(phoneme_dim, hidden_dim)
-        cross_indices = set(default_cross_indices(n_blocks))
+
+        self.to_k_ref = nn.Linear(hidden_dim, inner)
+        self.to_v_ref = nn.Linear(hidden_dim, inner)
+        self.to_k_text = nn.Linear(hidden_dim, inner)
+        self.to_v_text = nn.Linear(hidden_dim, inner)
+        self.k_norm_cross = RMSNorm((self.heads, self.dim_head), eps=1e-6)
+
+        self.emb_proj = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim * 2),
+            nn.GELU(),
+            nn.Linear(hidden_dim * 2, hidden_dim),
+        )
+
         self.transformer_blocks = nn.ModuleList(
-            [DiTBlock(hidden_dim, i in cross_indices) for i in range(n_blocks)]
+            [DiTBlock(hidden_dim) for _ in range(n_blocks)]
         )
         self.norm_out = AdaLayerNormZero_Final(hidden_dim)
 
-        for i, block in enumerate(self.transformer_blocks):
+        for block in self.transformer_blocks:
             nn.init.constant_(block.attn_norm.linear.weight, 0)  # type: ignore
             nn.init.constant_(block.attn_norm.linear.bias, 0)  # type: ignore
-            if i in cross_indices:
-                nn.init.constant_(block.xattn_norm.linear.weight, 0)  # type: ignore
-                nn.init.constant_(block.xattn_norm.linear.bias, 0)  # type: ignore
+        nn.init.constant_(self.norm_out.linear.weight, 0)  # type: ignore
+        nn.init.constant_(self.norm_out.linear.bias, 0)  # type: ignore
 
-        # zero-out output layers:
-        nn.init.constant_(self.norm_out.linear.weight, 0)
-        nn.init.constant_(self.norm_out.linear.bias, 0)
+    def _project_cross_kv(self, seq: Tensor, to_k: nn.Linear, to_v: nn.Linear):
+        b, n = seq.shape[:2]
+        h, d = self.heads, self.dim_head
+        k = to_k(seq).reshape(b, n, h, d)
+        k = self.k_norm_cross(k)
+        k = rearrange(k, "b n h d -> b h n d")
+        v = rearrange(to_v(seq), "b n (h d) -> b h n d", h=h)
+        return k, v
 
-    @jaxtyped(typechecker=beartype)
-    def forward(
-        self,
-        x: Float[Tensor, "batch sequence_length latent_dim"],  # noised input audio
-        cond: Float[Tensor, "batch sequence_length latent_dim"],  # masked true audio
-        phoneme_embedding: Float[
-            Tensor, "batch phoneme_length phoneme_embedding_dim"
-        ],  # text
-        phonemes_mask: Bool[Tensor, "batch phoneme_length"],  # phoneme mask
-        time_embedding: Float[Tensor, "batch hidden_dim"],  # time
-        mask: Bool[Tensor, "batch sequence_length"],  # regular mask
+    def encode_cross_kv(
+        self, ref_seq, ref_mask, phoneme_embedding, phonemes_mask, seq_len
     ):
-        seq_len = x.shape[1]
-        x = self.input_embed(x, cond, mask)
         rope = self.rotary_embed.forward_from_seq_len(seq_len)
         phoneme_mem = self.phoneme_proj(phoneme_embedding)
         phoneme_mem = phoneme_mem.masked_fill_(
             ~phonemes_mask.unsqueeze(-1).expand(-1, -1, phoneme_mem.size(-1)), 0
         )
+        k_ref, v_ref = self._project_cross_kv(ref_seq, self.to_k_ref, self.to_v_ref)
+        k_text, v_text = self._project_cross_kv(
+            phoneme_mem, self.to_k_text, self.to_v_text
+        )
+        return {
+            "k_ref": k_ref,
+            "v_ref": v_ref,
+            "ref_mask": ref_mask,
+            "k_text": k_text,
+            "v_text": v_text,
+            "phonemes_mask": phonemes_mask,
+            "rope": rope,
+        }
 
-        stacked_transformer_features = []
+    def forward_cached(self, x, time_embedding, mask, cached):
+        x = self.input_embed(x, mask)
+        emb = self.emb_proj(time_embedding)
         for block in self.transformer_blocks:
             x = block(
                 x=x,
-                emb=time_embedding,
+                emb=emb,
                 mask=mask,
-                phoneme_mem=phoneme_mem,
+                k_ref=cached["k_ref"],
+                v_ref=cached["v_ref"],
+                ref_mask=cached["ref_mask"],
+                k_text=cached["k_text"],
+                v_text=cached["v_text"],
+                phonemes_mask=cached["phonemes_mask"],
+                rope=cached["rope"],
+            )
+        x = self.norm_out(x, emb)
+        return x
+
+    @jaxtyped(typechecker=beartype)
+    def forward(
+        self,
+        x: Float[Tensor, "batch sequence_length latent_dim"],
+        ref_seq: Float[Tensor, "batch ref_len hidden_dim"],
+        ref_mask: Bool[Tensor, "batch ref_len"],
+        phoneme_embedding: Float[Tensor, "batch phoneme_length phoneme_dim"],
+        phonemes_mask: Bool[Tensor, "batch phoneme_length"],
+        time_embedding: Float[Tensor, "batch hidden_dim"],
+        mask: Bool[Tensor, "batch sequence_length"],
+        get_stacked_transformer_features: bool = False,
+    ):
+        x = self.input_embed(x, mask)
+        rope = self.rotary_embed.forward_from_seq_len(x.size(1))
+        phoneme_mem = self.phoneme_proj(phoneme_embedding)
+        phoneme_mem = phoneme_mem.masked_fill_(
+            ~phonemes_mask.unsqueeze(-1).expand(-1, -1, phoneme_mem.size(-1)), 0
+        )
+
+        k_ref, v_ref = self._project_cross_kv(ref_seq, self.to_k_ref, self.to_v_ref)
+        k_text, v_text = self._project_cross_kv(
+            phoneme_mem, self.to_k_text, self.to_v_text
+        )
+
+        emb = self.emb_proj(time_embedding)
+
+        stacked_transformer_features = [] if get_stacked_transformer_features else None
+        for block in self.transformer_blocks:
+            x = block(
+                x=x,
+                emb=emb,
+                mask=mask,
+                k_ref=k_ref,
+                v_ref=v_ref,
+                ref_mask=ref_mask,
+                k_text=k_text,
+                v_text=v_text,
                 phonemes_mask=phonemes_mask,
                 rope=rope,
             )
-            stacked_transformer_features.append(x)
-        x = self.norm_out(x, time_embedding)
+            if stacked_transformer_features is not None:
+                stacked_transformer_features.append(x)
+        x = self.norm_out(x, emb)
+        if stacked_transformer_features is None:
+            return x, None
         return x, torch.stack(stacked_transformer_features, dim=1)

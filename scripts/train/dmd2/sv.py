@@ -7,13 +7,11 @@ from tqdm import tqdm
 
 from smalltts.codec.onnx import Decoder
 from smalltts.data.dummy import get_dummy_dataloader
-from smalltts.models.asr import ASR
 from smalltts.models.sv.model import SV
 from smalltts.models.sv.true import get_embedding_model, get_true_embeddings
 
 BATCH_SIZE = 2
 NUM_WORKERS = 0
-ASR_CKPT = "assets/asr_checkpoints/checkpoint_latest.pt"
 NUM_STEPS = 200_000
 LOAD_FROM_CHECKPOINT: str | None = None
 SAVE_STEPS = 1_000
@@ -27,11 +25,7 @@ if __name__ == "__main__":
 
     true_model = get_embedding_model(accelerator)
 
-    asr = ASR(64).to(accelerator.device)
-    asr.load_state_dict(torch.load(ASR_CKPT, map_location=accelerator.device)["model"])
-    asr.encoder.requires_grad_(True)
-
-    sv = SV(192, asr)
+    sv = SV(192)
 
     optimizer = torch.optim.AdamW(
         sv.parameters(), lr=1e-4, betas=(0.9, 0.999), weight_decay=1e-2
