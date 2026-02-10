@@ -27,12 +27,24 @@ def dummy_collate_fn(
     latents_lengths = torch.tensor([len(lat) for lat in latents], dtype=torch.int64)
     latents = pad_sequence(latents, batch_first=True, padding_value=0.0)
 
+    ref_latents = []
+    for _ in range(batch_size):
+        length = random.randint(8, 64)
+        seq = torch.randn(length, 64)
+        ref_latents.append(seq)
+    ref_latents_lengths = torch.tensor(
+        [len(r) for r in ref_latents], dtype=torch.int64
+    )
+    ref_latents = pad_sequence(ref_latents, batch_first=True, padding_value=0.0)
+
     return {
         "texts": texts,
         "phonemes": phonemes,
         "phonemes_lengths": phonemes_lengths,
         "latents": latents,
         "latents_lengths": latents_lengths,
+        "ref_latents": ref_latents,
+        "ref_latents_lengths": ref_latents_lengths,
     }
 
 

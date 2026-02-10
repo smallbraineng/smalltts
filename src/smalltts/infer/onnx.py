@@ -1,164 +1,179 @@
-from typing import Any, Iterable, List, Optional
+"""ONNX inference using condition_encoder + denoiser split (DMD 4-step)."""
+
+from typing import Iterable, List, Optional
 
 import numpy as np
 import onnxruntime as ort
-import torch
 from torch import Tensor
-from torch.nn.utils.rnn import pad_sequence
 
 from smalltts.codec.onnx import _default_providers as default_providers
-from smalltts.data.phonemization.phonemes import get_token_ids
-from smalltts.train.utils import get_mask
+
+SAMPLE_RATE = 24_000
+HOP_SIZE = 3_200
+NUM_STEPS = 4
+GUIDANCE_SCALE = 2.0
+
+
+def _make_session(path: str, providers: list[str]) -> ort.InferenceSession:
+    so = ort.SessionOptions()
+    so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    return ort.InferenceSession(path, sess_options=so, providers=providers)
+
+
+def _input_names(sess: ort.InferenceSession) -> list[str]:
+    return [i.name for i in sess.get_inputs()]
+
+
+def _get_alpha_sigma(t: float, eps: float = 1e-5):
+    t = np.clip(t, eps, 1 - eps)
+    alpha_t_sq = np.cos(np.pi / 2 * t) ** 2
+    log_snr = np.log(alpha_t_sq / (1 - alpha_t_sq))
+    log_snr_s = log_snr + 2 * np.log(0.5)
+    alpha_sq = 1.0 / (1.0 + np.exp(-log_snr_s))
+    return np.sqrt(alpha_sq).astype(np.float32), np.sqrt(1 - alpha_sq).astype(
+        np.float32
+    )
+
+
+def _compute_rope_freqs(seq_len: int, dim: int = 64) -> np.ndarray:
+    inv_freq = 1.0 / (1e4 ** (np.arange(0, dim, 2, dtype=np.float32) / dim))
+    t = np.arange(seq_len, dtype=np.float32).reshape(1, -1)
+    freqs = np.einsum("bi,j->bij", t, inv_freq)
+    freqs = np.stack([freqs, freqs], axis=-1).reshape(1, seq_len, dim)
+    return freqs
 
 
 class SmallTTS:
+    """DMD 4-step inference using condition_encoder + denoiser ONNX split."""
+
     def __init__(
         self,
-        e2e_path: str = "assets/e2e/e2e.onnx",
-        length_path: str = "assets/length/length.onnx",
+        cond_encoder_path: str = "assets/dmd/condition_encoder.onnx",
+        denoiser_path: str = "assets/dmd/denoiser.onnx",
+        codec_decoder_path: str = "assets/codec/decoder.onnx",
         providers: Optional[Iterable[str]] = None,
     ) -> None:
-        provider = list(providers) if providers is not None else default_providers()
-        self.e2e_session = ort.InferenceSession(e2e_path, providers=provider)
-        self.e2e_out_name = self.e2e_session.get_outputs()[0].name
-        self.length_session = ort.InferenceSession(length_path, providers=provider)
-        self.length_out_name = self.length_session.get_outputs()[0].name
+        prov = list(providers) if providers is not None else default_providers()
+        self.cond_enc = _make_session(cond_encoder_path, prov)
+        self.denoiser = _make_session(denoiser_path, prov)
+        self.codec_dec = _make_session(codec_decoder_path, prov)
+        self.cond_enc_names = _input_names(self.cond_enc)
+        self.den_names = _input_names(self.denoiser)
+        self.dec_names = _input_names(self.codec_dec)
+
+    def synthesize(
+        self,
+        ref_latents: np.ndarray,
+        phoneme_ids: list[int],
+        duration_sec: float,
+    ) -> np.ndarray:
+        """Run the full DMD pipeline.
+
+        Args:
+            ref_latents: Reference audio latents, shape (T, 64), float32.
+            phoneme_ids: Phoneme token IDs for the text to speak.
+            duration_sec: Desired output duration in seconds.
+
+        Returns:
+            Audio samples, shape (1, samples), float32, 24kHz.
+        """
+        seq_len = max(1, int(duration_sec * SAMPLE_RATE / HOP_SIZE))
+        ref = ref_latents[np.newaxis].astype(np.float32)  # (1, ref_T, 64)
+        ref_len = np.array([ref.shape[1]], dtype=np.int64)
+
+        phonemes = np.array([phoneme_ids], dtype=np.int64)  # (1, P)
+        phonemes_mask = np.ones_like(phonemes, dtype=np.bool_)
+
+        # Condition encode: cond + uncond (for CFG)
+        cond_feed = dict(
+            zip(self.cond_enc_names, [ref, ref_len, phonemes, phonemes_mask])
+        )
+        k_ref, v_ref, ref_mask, k_text, v_text = self.cond_enc.run(None, cond_feed)
+
+        uncond_feed = {
+            **cond_feed,
+            self.cond_enc_names[2]: np.zeros_like(phonemes),
+            self.cond_enc_names[3]: np.zeros_like(phonemes_mask),
+        }
+        k_ref_u, v_ref_u, ref_mask_u, k_text_u, v_text_u = self.cond_enc.run(
+            None, uncond_feed
+        )
+
+        # Batch cond+uncond along dim 0
+        k_ref_cat = np.concatenate([k_ref, k_ref_u])
+        v_ref_cat = np.concatenate([v_ref, v_ref_u])
+        ref_mask_cat = np.concatenate([ref_mask, ref_mask_u])
+        k_text_cat = np.concatenate([k_text, k_text_u])
+        v_text_cat = np.concatenate([v_text, v_text_u])
+        phonemes_mask_cat = np.concatenate(
+            [phonemes_mask, np.zeros_like(phonemes_mask)]
+        )
+
+        rope = _compute_rope_freqs(seq_len)
+        mask_1 = np.ones((1, seq_len), dtype=np.bool_)
+        mask_2 = np.concatenate([mask_1, mask_1])
+        x_pred = np.zeros((1, seq_len, 64), dtype=np.float32)
+
+        # 4-step denoiser loop
+        for t_val in np.linspace(1, 0, NUM_STEPS, dtype=np.float32):
+            alpha, sigma = _get_alpha_sigma(float(t_val))
+            noise = np.random.randn(1, seq_len, 64).astype(np.float32)
+            x_t = (alpha * x_pred + sigma * noise).astype(np.float32)
+
+            den_feed = dict(
+                zip(
+                    self.den_names,
+                    [
+                        np.concatenate([x_t, x_t]),
+                        mask_2,
+                        np.array([t_val, t_val], dtype=np.float32),
+                        k_ref_cat,
+                        v_ref_cat,
+                        ref_mask_cat,
+                        k_text_cat,
+                        v_text_cat,
+                        phonemes_mask_cat,
+                        rope,
+                    ],
+                )
+            )
+            vel = self.denoiser.run(None, den_feed)[0]
+            vel_cond, vel_uncond = vel[:1], vel[1:]
+            velocity = vel_cond + GUIDANCE_SCALE * (vel_cond - vel_uncond)
+            x_pred = (alpha * x_t - sigma * velocity).astype(np.float32)
+
+        # Decode latents -> audio
+        dec_feed = {self.dec_names[0]: x_pred}
+        audio = self.codec_dec.run(None, dec_feed)[0]  # (1, 1, samples)
+        return audio[0]  # (1, samples)
 
     def forward(
         self,
         conditionings: List[Tensor],
-        transcriptions: List[Any],
-        texts: List[Any],
+        transcriptions: list,
+        texts: list,
+        duration_sec: float = 3.0,
     ) -> List[Tensor]:
-        batch_size = len(conditionings)
-        assert batch_size == len(transcriptions) and batch_size == len(texts)
-        latent_dim = conditionings[0].shape[1]
+        """Convenience wrapper matching the old SmallTTS API."""
+        import torch
 
-        def to_tokens(xs):
-            if len(xs) == 0:
-                return []
-            if isinstance(xs[0], str):
-                return [get_token_ids(s) for s in xs]
-            return [list(map(int, t)) for t in xs]
+        from smalltts.data.phonemization.phonemes import get_token_ids
 
-        cond_tokens = to_tokens(transcriptions)
-        new_tokens = to_tokens(texts)
-
-        phonemes = [
-            torch.tensor(cond_tokens[i] + new_tokens[i], dtype=torch.int64)
-            for i in range(batch_size)
-        ]
-        phonemes_lengths = torch.tensor([len(p) for p in phonemes], dtype=torch.int64)
-        padded_phonemes = pad_sequence(phonemes, batch_first=True, padding_value=0)
-        phonemes_mask = get_mask(
-            batch_size,
-            padded_phonemes.shape[1],
-            phonemes_lengths,
-            phonemes_lengths.device,
-        )
-        conditionings_lengths = torch.tensor(
-            [len(cond) for cond in conditionings], dtype=torch.int64
-        )
-        padded_conditionings = pad_sequence(
-            conditionings, batch_first=True, padding_value=0
-        )
-        conditionings_mask = get_mask(
-            batch_size,
-            padded_conditionings.shape[1],
-            conditionings_lengths,
-            conditionings_lengths.device,
-        )
-
-        length_out = self.length_session.run(
-            [self.length_out_name],
-            {
-                "phonemes": padded_phonemes.numpy().astype(np.int64, copy=False),
-                "phonemes_mask": phonemes_mask.cpu()
-                .numpy()
-                .astype(np.bool_, copy=False),
-                "latents": padded_conditionings.numpy().astype(np.float32, copy=False),
-                "mask": conditionings_mask.cpu().numpy().astype(np.bool, copy=False),
-            },
-        )[0]
-        estimated_lengths = (
-            torch.expm1(torch.from_numpy(length_out)).round().to(dtype=torch.int)
-        )
-
-        expanded_conds: List[Tensor] = []
-        for i, cond in enumerate(conditionings):
-            estimated_latents_length = int(estimated_lengths[i])
-            expanded_cond = torch.cat(
-                [
-                    cond,
-                    torch.zeros(
-                        (estimated_latents_length - cond.shape[0], latent_dim),
-                        device=cond.device,
-                    ),
-                ],
-                dim=0,
+        results = []
+        for i, (cond, trans, text) in enumerate(
+            zip(conditionings, transcriptions, texts)
+        ):
+            trans_tok = (
+                get_token_ids(trans) if isinstance(trans, str) else list(map(int, trans))
             )
-            expanded_conds.append(expanded_cond)
-
-        latents_lengths = torch.tensor(
-            [len(cond) for cond in expanded_conds], dtype=torch.int64
-        )
-        padded_conditionings = pad_sequence(
-            expanded_conds, batch_first=True, padding_value=0
-        )
-        sequence_length = padded_conditionings.shape[1]
-        mask = get_mask(
-            batch_size, sequence_length, latents_lengths, latents_lengths.device
-        )
-
-        phonemes = [
-            torch.tensor(cond_tokens[i] + new_tokens[i], dtype=torch.int64)
-            for i in range(batch_size)
-        ]
-        phonemes_lengths = torch.tensor([len(p) for p in phonemes], dtype=torch.int64)
-        padded_phonemes = pad_sequence(phonemes, batch_first=True, padding_value=0)
-        phonemes_mask = get_mask(
-            batch_size,
-            padded_phonemes.shape[1],
-            phonemes_lengths,
-            phonemes_lengths.device,
-        )
-
-        noise = torch.randn(
-            (4, batch_size, padded_conditionings.shape[1], latent_dim),
-            dtype=torch.float32,
-        )
-
-        out = self.e2e_session.run(
-            [self.e2e_out_name],
-            {
-                "cond": padded_conditionings.numpy().astype(np.float32, copy=False),
-                "mask": mask.cpu().numpy().astype(np.bool_, copy=False),
-                "phonemes": padded_phonemes.numpy().astype(np.int32, copy=False),
-                "phonemes_mask": phonemes_mask.cpu()
-                .numpy()
-                .astype(np.bool_, copy=False),
-                "noise": noise.numpy().astype(np.float32, copy=False),
-            },
-        )[0]
-
-        out = torch.from_numpy(out)
-
-        audios: List[Tensor] = []
-
-        for i in range(0, batch_size):
-            audio = out[i]
-            cond_start = conditionings[i].shape[0] * 3_200
-            audios.append(
-                audio[:, cond_start : cond_start + estimated_lengths[i] * 3_200]
+            text_tok = (
+                get_token_ids(text) if isinstance(text, str) else list(map(int, text))
             )
-
-        return audios
+            all_tokens = trans_tok + text_tok
+            audio = self.synthesize(
+                cond.numpy().astype(np.float32), all_tokens, duration_sec
+            )
+            results.append(torch.from_numpy(audio))
+        return results
 
     __call__ = forward
-
-
-if __name__ == "__main__":
-    tts = SmallTTS()
-    x = [torch.randn(50, 64, dtype=torch.float32)]
-    y = tts(x, ["hello world"], ["this is a test"])
-    print(y, y[0].shape)

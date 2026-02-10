@@ -10,12 +10,44 @@ from .normalizer import EnglishTextNormalizer
 _punct = ';:,.!?¡¿—…"«»"" '
 _letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 _letters_ipa = "ɑɐɒæɓʙβɔɕçɗɖðʤəɘɚɛɜɝɞɟʄɡɠɢʛɦɧħɥʜɨɪʝɭɬɫɮʟɱɯɰŋɳɲɴøɵɸθœɶʘɹɺɾɻʀʁɽʂʃʈʧʉʊʋⱱʌɣɤʍχʎʏʑʐʒʔʡʕʢǀǁǂǃˈˌːˑʼʴʰʱʲʷˠˤ˞↓↑→↗↘'̩'ᵻ"
+_sed_labels = [
+    "babble",
+    "boo",
+    "burp",
+    "chant",
+    "cheer",
+    "cough",
+    "cry",
+    "gargle",
+    "gasp",
+    "groan",
+    "grunt",
+    "hiccup",
+    "hum",
+    "laughter",
+    "moan",
+    "shout",
+    "sigh",
+    "sing",
+    "sneeze",
+    "sniff",
+    "snore",
+    "whisper",
+    "whistle",
+]
+
+NV_REPEAT = 4
 _syms = []
 _seen = set()
 for ch in _punct + _letters + _letters_ipa:
     if ch not in _seen:
         _seen.add(ch)
         _syms.append(ch)
+for label in _sed_labels:
+    sym = f"[{label}]"
+    if sym not in _seen:
+        _seen.add(sym)
+        _syms.append(sym)
 
 p2idx = {ch: i + 1 for i, ch in enumerate(_syms)}
 idx2p = {v: k for k, v in p2idx.items()}
@@ -32,6 +64,7 @@ _es = EspeakBackend(
     logger=get_logger(verbosity="quiet"),
 )
 _tok = re.compile(r"\w+|[^\w\s]")
+_bracket_re = re.compile(r"\[(\w+)\]")
 normalizer = EnglishTextNormalizer()
 
 
@@ -42,12 +75,46 @@ def _phonemize(text: str) -> str:
 
 
 def get_token_ids(text: str):
-    s = _phonemize(text)
-    return [p2idx[c] for c in s if c in p2idx]
+    parts = _bracket_re.split(text)
+    out = []
+    for i, part in enumerate(parts):
+        if i % 2 == 0:
+            if part.strip():
+                s = _phonemize(part)
+                out.extend([p2idx[c] for c in s if c in p2idx])
+        else:
+            eid = get_sed_event_id(part)
+            if eid is not None:
+                out.extend([eid] * NV_REPEAT)
+    return out
 
 
 def decode_token_ids(token_ids):
     return "".join(idx2p.get(t, "") for t in token_ids)
+
+
+def get_sed_event_id(label: str):
+    return p2idx.get(f"[{label.lower()}]") if label.lower() in _sed_labels else None
+
+
+def merge_transcript(asr_words: list, sed_events: list) -> str:
+    items = []
+    for w in asr_words:
+        start = w.get("start")
+        word = w.get("word", "")
+        if start is not None and word:
+            items.append((float(start), word))
+    for e in sed_events:
+        label = e.get("label")
+        if label is None or label.lower() not in _sed_labels:
+            continue
+        if e.get("prob", 0.0) < 0.1:
+            continue
+        start = e.get("start")
+        if start is not None:
+            items.append((float(start), f"[{label.lower()}]"))
+    items.sort(key=lambda x: x[0])
+    return " ".join(t for _, t in items)
 
 
 if __name__ == "__main__":
