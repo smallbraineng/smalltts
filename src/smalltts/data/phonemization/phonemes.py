@@ -3,9 +3,15 @@ import re
 from typing import List
 
 from phonemizer.backend import EspeakBackend
+from phonemizer.backend.espeak.wrapper import EspeakWrapper
+import espeakng_loader
 from phonemizer.logger import get_logger
 
 from .normalizer import EnglishTextNormalizer
+
+# Initialize ESpeakNG (no installation required)
+EspeakWrapper.set_library(espeakng_loader.get_library_path())
+EspeakWrapper.set_data_path(espeakng_loader.get_data_path())
 
 _punct = ';:,.!?¡¿—…"«»"" '
 _letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
