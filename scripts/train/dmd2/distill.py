@@ -1,5 +1,5 @@
 import torch
-import torch.nn.functional as F
+torch.multiprocessing.set_sharing_strategy('file_system')
 from accelerate import Accelerator
 from jaxtyping import Bool, Float, Int64
 from torch import Tensor
@@ -20,14 +20,14 @@ NUM_STEPS = 40_000
 SCORER_UPDATES = 5
 NUM_SAVE_STEPS = 800
 TIMESTEPS = [1.0, 1.0, 0.75, 0.50, 0.25]
-TEACHER_CHECKPOINT = "assets/teacher_checkpoints/checkpoint_latest.pt"
+TEACHER_CHECKPOINT = "assets/teacher_checkpoints/checkpoint_ema.pt"
 ASR_CHECKPOINT = "assets/asr_checkpoints/checkpoint_latest.pt"
 SV_CHECKPOINT = "assets/sv_checkpoints/checkpoint_latest.pt"
 LOAD_FROM_CHECKPOINT: str | None = None
 
 
 def cosine_loss(x, y):
-    return 1.0 - F.cosine_similarity(x, y, dim=-1)
+    return 1.0 - torch.nn.functional.cosine_similarity(x, y, dim=-1)
 
 
 def set_grad(model, set: bool):
@@ -35,21 +35,25 @@ def set_grad(model, set: bool):
         p.requires_grad = set
 
 
-def load_from_checkpoint(model, checkpoint_path: str, device: torch.device):
+def load_from_checkpoint(model, checkpoint_path: str, device: torch.device, key=None):
+    print("loading checkpoint", checkpoint_path)
     ckpt = torch.load(checkpoint_path, map_location=device)
-    if isinstance(ckpt, dict) and "model" in ckpt:
-        state_dict = ckpt["model"]
-    else:
-        state_dict = ckpt
+    if isinstance(ckpt, dict) and key is not None and key in ckpt:
+        ckpt = ckpt[key]
+    elif isinstance(ckpt, dict) and "model" in ckpt:
+        ckpt = ckpt["model"]
     cleaned = {}
-    for k, v in state_dict.items():
+    for k, v in ckpt.items():
         if k in ("initted", "step"):
             continue
         for prefix in ("module.", "_orig_mod.", "ema_model.", "online_model."):
             while k.startswith(prefix):
-                k = k[len(prefix) :]
+                k = k[len(prefix):]
+        k = k.replace("._orig_mod.", ".")
         cleaned[k] = v
-    model.load_state_dict(cleaned)
+    sd = model.state_dict()
+    filtered = {k: v for k, v in cleaned.items() if k in sd}
+    model.load_state_dict(filtered)
 
 
 def get_x_pred(
@@ -63,42 +67,31 @@ def get_x_pred(
     t: Float[Tensor, " batch"],
     cfg: bool,
     get_stacked_transformer_features: bool,
+    cfg_scale_text: float = 2.0,
+    cfg_scale_speaker: float = 1.5,
 ):
-    velocity = None
     stacked_features = None
-    if get_stacked_transformer_features:
+    if cfg and not get_stacked_transformer_features:
+        x_t_3 = x_t.repeat(3, 1, 1)
+        ref_3 = torch.cat([ref_latents, ref_latents, torch.zeros_like(ref_latents)], dim=0)
+        ref_len_3 = torch.cat([ref_latents_lengths, ref_latents_lengths, torch.zeros_like(ref_latents_lengths)], dim=0)
+        mask_3 = mask.repeat(3, 1)
+        ph_3 = torch.cat([phonemes, torch.zeros_like(phonemes), phonemes], dim=0)
+        ph_mask_3 = torch.cat([phonemes_mask, torch.zeros_like(phonemes_mask).to(dtype=torch.bool), phonemes_mask], dim=0)
+        t_3 = t.repeat(3)
+        vel_3 = model(x_t_3, ref_3, ref_len_3, mask_3, ph_3, ph_mask_3, t_3)
+        v_cond, v_uncond_text, v_uncond_spk = vel_3.chunk(3, dim=0)
+        velocity = v_cond + cfg_scale_text * (v_cond - v_uncond_text) + cfg_scale_speaker * (v_cond - v_uncond_spk)
+    elif get_stacked_transformer_features:
         velocity, stacked_features = model(
-            x_t,
-            ref_latents,
-            ref_latents_lengths,
-            mask,
-            phonemes,
-            phonemes_mask,
-            t,
+            x_t, ref_latents, ref_latents_lengths, mask,
+            phonemes, phonemes_mask, t,
             get_stacked_transformer_features=True,
         )
     else:
         velocity = model(
-            x_t,
-            ref_latents,
-            ref_latents_lengths,
-            mask,
-            phonemes,
-            phonemes_mask,
-            t,
-        )
-    if cfg:
-        velocity += 2 * (
-            velocity
-            - model(
-                x_t,
-                ref_latents,
-                ref_latents_lengths,
-                mask,
-                torch.zeros_like(phonemes),
-                torch.zeros_like(phonemes_mask).to(dtype=torch.bool),
-                t,
-            )
+            x_t, ref_latents, ref_latents_lengths, mask,
+            phonemes, phonemes_mask, t,
         )
     alpha_t, sigma_t = get_alpha_sigma(t)
     alpha_t = alpha_t.view(-1, 1, 1)
@@ -115,9 +108,10 @@ if __name__ == "__main__":
     accelerator = Accelerator()
 
     student = DiTModel(64).to(accelerator.device)
+    student.dit.gradient_checkpointing = True
     student_scorer = DiTModel(64).to(accelerator.device)
     teacher = DiTModel(64).to(accelerator.device)
-    discriminator = Discriminator(64).to(accelerator.device)
+    discriminator = Discriminator(64, transformer_dim=1024, ref_dim=1024).to(accelerator.device)
     asr = ASR(64).to(accelerator.device)
     sv = SV(192).to(accelerator.device)
     ctc_loss = CTCLoss(blank=0, zero_infinity=True)
@@ -246,7 +240,7 @@ if __name__ == "__main__":
             device=accelerator.device,
         )
         z, _ = apply_noise(x_0_prev, student_timesteps)
-        x_0: Tensor = get_x_pred(
+        x_0: Tensor = get_x_pred(  # type: ignore[assignment]
             student,
             z,
             ref_latents,
@@ -257,7 +251,7 @@ if __name__ == "__main__":
             student_timesteps,
             cfg=False,
             get_stacked_transformer_features=False,
-        )  # type: ignore
+        )
 
         timesteps = torch.rand(batch_size).to(accelerator.device)
         x_t, _ = apply_noise(x_0, timesteps)
@@ -336,6 +330,7 @@ if __name__ == "__main__":
             + lambda_sv * student_sv_loss
         )
         student_optimizer.step()
+        torch.cuda.empty_cache()
 
         set_grad(discriminator, True)
         x_real, _ = apply_noise(latents, timesteps)
@@ -384,12 +379,13 @@ if __name__ == "__main__":
         discriminator_optimizer.zero_grad()
         accelerator.backward(discriminator_loss)
         discriminator_optimizer.step()
+        torch.cuda.empty_cache()
 
         loss = None
         for _ in range(SCORER_UPDATES):
             z, _ = apply_noise(x_0_prev, student_timesteps)
             with torch.inference_mode():
-                x_0: Tensor = get_x_pred(
+                x_0_scorer: Tensor = get_x_pred(  # type: ignore[assignment]
                     student,
                     z,
                     ref_latents,
@@ -400,10 +396,10 @@ if __name__ == "__main__":
                     student_timesteps,
                     False,
                     False,
-                )  # type: ignore
+                )
 
             timesteps = torch.rand(batch_size).to(accelerator.device)
-            noised, v_target = apply_noise(x_0, timesteps)
+            noised, v_target = apply_noise(x_0_scorer, timesteps)
 
             v_pred = student_scorer(
                 noised,

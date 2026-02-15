@@ -26,26 +26,20 @@ def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
 
 
 class SelfAttention(nn.Module):
-    def __init__(
-        self, model_size: int, num_heads: int, is_causal: bool, norm_eps: float
-    ):
+    def __init__(self, model_size: int, num_heads: int, is_causal: bool, norm_eps: float):
         super().__init__()
         self.num_heads = num_heads
         self.is_causal = is_causal
-
         self.wq = nn.Linear(model_size, model_size, bias=False)
         self.wk = nn.Linear(model_size, model_size, bias=False)
         self.wv = nn.Linear(model_size, model_size, bias=False)
         self.wo = nn.Linear(model_size, model_size, bias=False)
         self.gate = nn.Linear(model_size, model_size, bias=False)
-
         assert model_size % num_heads == 0
         self.q_norm = RMSNorm((num_heads, model_size // num_heads), eps=norm_eps)
         self.k_norm = RMSNorm((num_heads, model_size // num_heads), eps=norm_eps)
 
-    def forward(
-        self, x: torch.Tensor, mask: torch.Tensor | None, freqs_cis: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mask: torch.Tensor | None, freqs_cis: torch.Tensor) -> torch.Tensor:
         batch_size, seq_len = x.shape[:2]
         xq = self.wq(x).reshape(batch_size, seq_len, self.num_heads, -1)
         xk = self.wk(x).reshape(batch_size, seq_len, self.num_heads, -1)
@@ -58,11 +52,8 @@ class SelfAttention(nn.Module):
         if mask is not None:
             mask = mask[:, None, None]
         output = F.scaled_dot_product_attention(
-            xq.transpose(1, 2),
-            xk.transpose(1, 2),
-            xv.transpose(1, 2),
-            attn_mask=mask,
-            is_causal=self.is_causal,
+            xq.transpose(1, 2), xk.transpose(1, 2), xv.transpose(1, 2),
+            attn_mask=mask, is_causal=self.is_causal,
         ).transpose(1, 2)
         output = output.reshape(batch_size, seq_len, -1) * torch.sigmoid(gate)
         return self.wo(output)
@@ -80,43 +71,27 @@ class MLP(nn.Module):
 
 
 class EncoderTransformerBlock(nn.Module):
-    def __init__(
-        self,
-        model_size: int,
-        num_heads: int,
-        intermediate_size: int,
-        is_causal: bool,
-        norm_eps: float,
-    ):
+    def __init__(self, model_size: int, num_heads: int, intermediate_size: int, is_causal: bool, norm_eps: float):
         super().__init__()
-        self.attention = SelfAttention(
-            model_size=model_size,
-            num_heads=num_heads,
-            is_causal=is_causal,
-            norm_eps=norm_eps,
-        )
+        self.attention = SelfAttention(model_size=model_size, num_heads=num_heads, is_causal=is_causal, norm_eps=norm_eps)
         self.mlp = MLP(model_size=model_size, intermediate_size=intermediate_size)
-
         self.attention_norm = RMSNorm(model_size, norm_eps)
         self.mlp_norm = RMSNorm(model_size, norm_eps)
 
-    def forward(
-        self, x: torch.Tensor, mask: torch.Tensor | None, freqs_cis: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mask: torch.Tensor | None, freqs_cis: torch.Tensor) -> torch.Tensor:
         x = x + self.attention(self.attention_norm(x), mask, freqs_cis)
         x = x + self.mlp(self.mlp_norm(x))
-
         return x
 
 
 LATENT_SIZE = 64
-PATCH_SIZE = 4
-MODEL_SIZE = 256
-NUM_LAYERS = 4
+PATCH_SIZE = 1
+MODEL_SIZE = 512
+NUM_LAYERS = 12
 NUM_HEADS = 8
-INTERMEDIATE_SIZE = 1024
+INTERMEDIATE_SIZE = 1536
 NORM_EPS = 1e-5
-STYLE_DIM = 192
+STYLE_DIM = 512
 
 
 class StyleEncoder(nn.Module):
@@ -137,7 +112,12 @@ class StyleEncoder(nn.Module):
             ]
         )
         self.head_dim = MODEL_SIZE // NUM_HEADS
+        self.log_scale = nn.Parameter(torch.tensor(-1.8))
+        self.norm = RMSNorm(MODEL_SIZE, NORM_EPS)
         self.out_proj = nn.Linear(MODEL_SIZE, out_dim)
+        self.register_buffer(
+            "freqs_cis", precompute_freqs_cis(self.head_dim, 4096), persistent=False
+        )
 
     @jaxtyped(typechecker=beartype)
     def forward(
@@ -163,10 +143,11 @@ class StyleEncoder(nn.Module):
             mask = torch.ones(b, patched_len, dtype=torch.bool, device=latent.device)
         x = latent.reshape(b, patched_len, latent.shape[-1] * self.patch_size)
         x = self.in_proj(x)
-        x = x / 6.0
-        freqs_cis = precompute_freqs_cis(self.head_dim, x.shape[1]).to(x.device)
+        x = x * self.log_scale.exp()
+        freqs_cis = self.freqs_cis[:x.shape[1]]
         for block in self.blocks:
             x = block(x, mask, freqs_cis)
+        x = self.norm(x)
         x = self.out_proj(x)
         x = x.masked_fill(~mask.unsqueeze(-1), 0.0)
         return x, mask

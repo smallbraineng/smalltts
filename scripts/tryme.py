@@ -3,27 +3,28 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
-import torch
 
 from smalltts.assets.ensure import ensure_assets
-from smalltts.infer.onnx import SmallTTS
+from smalltts.data.phonemization.phonemes import get_token_ids
+from smalltts.infer.onnx import SmallTTS, estimate_duration
 
 if __name__ == "__main__":
     Path("out").mkdir(exist_ok=True)
+    ensure_assets(["tryme", "codec", "dmd"])
 
-    ensure_assets(["tryme", "codec", "e2e"])
+    text = (
+        sys.argv[1]
+        if len(sys.argv) > 1
+        else "hello this is small brain speaking, thanks for trying this model out and have fun"
+    )
 
     print("loading model")
     model = SmallTTS()
-    print("generating")
-    y = model(
-        [torch.from_numpy(np.load("assets/tryme/latents.npy")).float()],
-        [np.load("assets/tryme/tokens.npy").tolist()],
-        [
-            sys.argv[1]
-            if len(sys.argv) > 1
-            else "hello this is small brain speaking, thanks for trying this model out and have fun"
-        ],
-    )[0]
-    sf.write("out/tryme.wav", y.squeeze(0).t().numpy(), 24_000, subtype="PCM_16")
+    ref_latents = np.load("assets/tryme/latents.npy").astype(np.float32)
+    tokens = get_token_ids(text)
+    duration = estimate_duration(text)
+
+    print(f"generating ({duration:.1f}s estimated)")
+    audio = model.synthesize(ref_latents, tokens, duration)
+    sf.write("out/tryme.wav", audio.squeeze(), 24_000, subtype="PCM_16")
     print("out/tryme.wav")
