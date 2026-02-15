@@ -3,6 +3,10 @@ name = "smalltts-server"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"
+
 [dependencies]
 alloy-primitives = "1.4"
 anyhow = "1"
