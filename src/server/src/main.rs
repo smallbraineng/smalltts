@@ -71,7 +71,7 @@ async fn main() -> Result<()> {
                     async move {
                         vec![V2Eip155Exact::price_tag(
                             payment_address,
-                            USDC::base_sepolia().amount(amount),
+                            USDC::base().amount(amount),
                         )]
                     }
                 },
