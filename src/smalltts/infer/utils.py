@@ -21,5 +21,3 @@ def resample_hq(x: torch.Tensor, sr: int, target: int) -> torch.Tensor:
         return x
     r = make_resampler(sr, target)
     return r(x)
-
-

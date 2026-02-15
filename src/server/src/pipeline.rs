@@ -20,7 +20,7 @@ pub struct Pipeline {
 
 impl Pipeline {
     pub fn load() -> Result<Self> {
-        let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../assets");
+        let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets");
         Ok(Self {
             codec_enc: Session::builder()?
                 .commit_from_file(format!("{base}/codec/encoder.onnx"))?,

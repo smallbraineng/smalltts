@@ -167,7 +167,9 @@ class SmallTTS:
         results = []
         for cond, trans, text in zip(conditionings, transcriptions, texts):
             trans_tok = (
-                get_token_ids(trans) if isinstance(trans, str) else list(map(int, trans))
+                get_token_ids(trans)
+                if isinstance(trans, str)
+                else list(map(int, trans))
             )
             text_tok = (
                 get_token_ids(text) if isinstance(text, str) else list(map(int, text))

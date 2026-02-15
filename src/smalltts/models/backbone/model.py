@@ -125,7 +125,9 @@ def test_forward_backward():
 
     ref_seq = 24
     ref_latents = torch.randn(batch_size, ref_seq, 64).to(device)
-    ref_latents_lengths = torch.full((batch_size,), ref_seq, dtype=torch.int64).to(device)
+    ref_latents_lengths = torch.full((batch_size,), ref_seq, dtype=torch.int64).to(
+        device
+    )
 
     mask = torch.ones(batch_size, seq_len, dtype=torch.bool).to(device)
     mask[1, seq_len // 2 :] = False
@@ -135,7 +137,9 @@ def test_forward_backward():
     model.train()
 
     start_time = time.time()
-    output = model(noised, ref_latents, ref_latents_lengths, mask, phonemes, phonemes_mask, t)
+    output = model(
+        noised, ref_latents, ref_latents_lengths, mask, phonemes, phonemes_mask, t
+    )
     end_time = time.time()
     print(f"time taken for model forward pass: {end_time - start_time:.4f} seconds")
 

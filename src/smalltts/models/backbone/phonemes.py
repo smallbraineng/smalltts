@@ -20,7 +20,9 @@ class ConvNeXtV2Block(nn.Module):
     def __init__(self, dim: int, intermediate_dim: int, dilation: int = 1):
         super().__init__()
         padding = (dilation * (7 - 1)) // 2
-        self.dwconv = nn.Conv1d(dim, dim, kernel_size=7, padding=padding, groups=dim, dilation=dilation)
+        self.dwconv = nn.Conv1d(
+            dim, dim, kernel_size=7, padding=padding, groups=dim, dilation=dilation
+        )
         self.norm = nn.LayerNorm(dim, eps=1e-6)
         self.pwconv1 = nn.Linear(dim, intermediate_dim)
         self.act = nn.GELU()
@@ -40,7 +42,9 @@ class ConvNeXtV2Block(nn.Module):
         return residual + x
 
 
-def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0, theta_rescale_factor=1.0):
+def precompute_freqs_cis(
+    dim: int, end: int, theta: float = 10000.0, theta_rescale_factor=1.0
+):
     theta *= theta_rescale_factor ** (dim / (dim - 2))
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end, device=freqs.device)
@@ -63,7 +67,9 @@ def get_pos_embed_indices(start, length, max_pos, scale=1.0):
     return pos
 
 
-def precompute_freqs_cis_complex(dim: int, end: int, theta: float = 10000.0) -> torch.Tensor:
+def precompute_freqs_cis_complex(
+    dim: int, end: int, theta: float = 10000.0
+) -> torch.Tensor:
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end, device=freqs.device)
     freqs = torch.outer(t, freqs)
@@ -79,7 +85,9 @@ def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
 
 
 class SelfAttention(nn.Module):
-    def __init__(self, model_size: int, num_heads: int, is_causal: bool, norm_eps: float):
+    def __init__(
+        self, model_size: int, num_heads: int, is_causal: bool, norm_eps: float
+    ):
         super().__init__()
         self.num_heads = num_heads
         self.is_causal = is_causal
@@ -92,7 +100,9 @@ class SelfAttention(nn.Module):
         self.q_norm = RMSNorm((num_heads, model_size // num_heads), eps=norm_eps)
         self.k_norm = RMSNorm((num_heads, model_size // num_heads), eps=norm_eps)
 
-    def forward(self, x: torch.Tensor, mask: torch.Tensor | None, freqs_cis: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, mask: torch.Tensor | None, freqs_cis: torch.Tensor
+    ) -> torch.Tensor:
         batch_size, seq_len = x.shape[:2]
         xq = self.wq(x).reshape(batch_size, seq_len, self.num_heads, -1)
         xk = self.wk(x).reshape(batch_size, seq_len, self.num_heads, -1)
@@ -130,21 +140,43 @@ class MLP(nn.Module):
 
 
 class EncoderTransformerBlock(nn.Module):
-    def __init__(self, model_size: int, num_heads: int, intermediate_size: int, is_causal: bool, norm_eps: float):
+    def __init__(
+        self,
+        model_size: int,
+        num_heads: int,
+        intermediate_size: int,
+        is_causal: bool,
+        norm_eps: float,
+    ):
         super().__init__()
-        self.attention = SelfAttention(model_size=model_size, num_heads=num_heads, is_causal=is_causal, norm_eps=norm_eps)
+        self.attention = SelfAttention(
+            model_size=model_size,
+            num_heads=num_heads,
+            is_causal=is_causal,
+            norm_eps=norm_eps,
+        )
         self.mlp = MLP(model_size=model_size, intermediate_size=intermediate_size)
         self.attention_norm = RMSNorm(model_size, norm_eps)
         self.mlp_norm = RMSNorm(model_size, norm_eps)
 
-    def forward(self, x: torch.Tensor, mask: torch.Tensor | None, freqs_cis: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, mask: torch.Tensor | None, freqs_cis: torch.Tensor
+    ) -> torch.Tensor:
         x = x + self.attention(self.attention_norm(x), mask, freqs_cis)
         x = x + self.mlp(self.mlp_norm(x))
         return x
 
 
 class TextEncoder(nn.Module):
-    def __init__(self, vocab_size: int, model_size: int, num_layers: int, num_heads: int, intermediate_size: int, norm_eps: float):
+    def __init__(
+        self,
+        vocab_size: int,
+        model_size: int,
+        num_layers: int,
+        num_heads: int,
+        intermediate_size: int,
+        norm_eps: float,
+    ):
         super().__init__()
         self.text_embedding = nn.Embedding(vocab_size, model_size)
         self.blocks = nn.ModuleList()
@@ -160,12 +192,16 @@ class TextEncoder(nn.Module):
         self.head_dim = model_size // num_heads
         self.norm = RMSNorm(model_size, norm_eps)
         self.register_buffer(
-            "freqs_cis", precompute_freqs_cis_complex(self.head_dim, 4096), persistent=False
+            "freqs_cis",
+            precompute_freqs_cis_complex(self.head_dim, 4096),
+            persistent=False,
         )
 
-    def forward(self, input_ids: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self, input_ids: torch.Tensor, mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
         x = self.text_embedding(input_ids)
-        freqs_cis = self.freqs_cis[:input_ids.shape[1]]
+        freqs_cis = self.freqs_cis[: input_ids.shape[1]]
         for block in self.blocks:
             x = block(x, mask, freqs_cis)
         return self.norm(x)

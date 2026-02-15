@@ -87,7 +87,9 @@ class JointAttention(nn.Module):
 
     def project_cross_kv(self, ref_seq, phoneme_mem):
         k_ref, v_ref = self._project_cross(ref_seq, self.to_k_ref, self.to_v_ref)
-        k_text, v_text = self._project_cross(phoneme_mem, self.to_k_text, self.to_v_text)
+        k_text, v_text = self._project_cross(
+            phoneme_mem, self.to_k_text, self.to_v_text
+        )
         return {"k_ref": k_ref, "v_ref": v_ref, "k_text": k_text, "v_text": v_text}
 
     def _self_attn_qkv(self, x, rope):
@@ -119,7 +121,9 @@ class JointAttention(nn.Module):
     def forward(self, x, ref_seq, phoneme_mem, mask, attn_mask, rope):
         q, k_self, v_self = self._self_attn_qkv(x, rope)
         k_ref, v_ref = self._project_cross(ref_seq, self.to_k_ref, self.to_v_ref)
-        k_text, v_text = self._project_cross(phoneme_mem, self.to_k_text, self.to_v_text)
+        k_text, v_text = self._project_cross(
+            phoneme_mem, self.to_k_text, self.to_v_text
+        )
         k = torch.cat([k_self, k_ref, k_text], dim=2)
         v = torch.cat([v_self, v_ref, v_text], dim=2)
         return self._attend(x, q, k, v, mask, attn_mask)
@@ -293,18 +297,32 @@ class DiT(nn.Module):
         )
         return phoneme_mem
 
-    def encode_cross_kv(self, ref_seq, ref_mask, phoneme_embedding, phonemes_mask, seq_len):
+    def encode_cross_kv(
+        self, ref_seq, ref_mask, phoneme_embedding, phonemes_mask, seq_len
+    ):
         rope = self.rotary_embed.forward_from_seq_len(seq_len)
         phoneme_mem = self._prepare_phoneme_mem(phoneme_embedding, phonemes_mask)
-        layers = [block.attn.project_cross_kv(ref_seq, phoneme_mem) for block in self.transformer_blocks]
-        return {"layers": layers, "ref_mask": ref_mask, "phonemes_mask": phonemes_mask, "rope": rope}
+        layers = [
+            block.attn.project_cross_kv(ref_seq, phoneme_mem)
+            for block in self.transformer_blocks
+        ]
+        return {
+            "layers": layers,
+            "ref_mask": ref_mask,
+            "phonemes_mask": phonemes_mask,
+            "rope": rope,
+        }
 
     def forward_cached(self, x, time_embedding, mask, cached):
         x = self.input_embed(x, mask)
         emb = self.emb_proj(time_embedding)
-        attn_mask = self._build_attn_mask(mask, cached["ref_mask"], cached["phonemes_mask"])
+        attn_mask = self._build_attn_mask(
+            mask, cached["ref_mask"], cached["phonemes_mask"]
+        )
         for i, block in enumerate(self.transformer_blocks):
-            x = block.forward_cached(x, emb, mask, cached["layers"][i], attn_mask, cached["rope"])
+            x = block.forward_cached(
+                x, emb, mask, cached["layers"][i], attn_mask, cached["rope"]
+            )
         x = self.norm_out(x, emb)
         return x
 
@@ -328,7 +346,17 @@ class DiT(nn.Module):
         stacked_transformer_features = [] if get_stacked_transformer_features else None
         for block in self.transformer_blocks:
             if self.gradient_checkpointing and self.training:
-                x = grad_checkpoint(block, x, emb, mask, ref_seq, phoneme_mem, attn_mask, rope, use_reentrant=False)
+                x = grad_checkpoint(
+                    block,
+                    x,
+                    emb,
+                    mask,
+                    ref_seq,
+                    phoneme_mem,
+                    attn_mask,
+                    rope,
+                    use_reentrant=False,
+                )
             else:
                 x = block(x, emb, mask, ref_seq, phoneme_mem, attn_mask, rope)
             if stacked_transformer_features is not None:

@@ -29,7 +29,7 @@ if __name__ == "__main__":
     tts = SmallTTS()
 
     for i, (fpath, text) in enumerate(zip(files, texts)):
-        print(f"[{i+1}/{len(files)}] {fpath.name}")
+        print(f"[{i + 1}/{len(files)}] {fpath.name}")
         y, sr = sf.read(str(fpath), dtype="float32", always_2d=False)
         if y.ndim == 2:
             y = y.mean(axis=1)

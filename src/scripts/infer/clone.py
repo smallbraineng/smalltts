@@ -15,7 +15,12 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--wav", required=True, help="reference audio file")
     ap.add_argument("--text", required=True, help="text to speak")
-    ap.add_argument("--duration", type=float, default=None, help="duration in seconds (auto if omitted)")
+    ap.add_argument(
+        "--duration",
+        type=float,
+        default=None,
+        help="duration in seconds (auto if omitted)",
+    )
     ap.add_argument("--out", default="out/clone.wav")
     args = ap.parse_args()
 

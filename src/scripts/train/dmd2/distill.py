@@ -1,5 +1,6 @@
 import torch
-torch.multiprocessing.set_sharing_strategy('file_system')
+
+torch.multiprocessing.set_sharing_strategy("file_system")
 from accelerate import Accelerator
 from jaxtyping import Bool, Float, Int64
 from torch import Tensor
@@ -48,7 +49,7 @@ def load_from_checkpoint(model, checkpoint_path: str, device: torch.device, key=
             continue
         for prefix in ("module.", "_orig_mod.", "ema_model.", "online_model."):
             while k.startswith(prefix):
-                k = k[len(prefix):]
+                k = k[len(prefix) :]
         k = k.replace("._orig_mod.", ".")
         cleaned[k] = v
     sd = model.state_dict()
@@ -73,25 +74,55 @@ def get_x_pred(
     stacked_features = None
     if cfg and not get_stacked_transformer_features:
         x_t_3 = x_t.repeat(3, 1, 1)
-        ref_3 = torch.cat([ref_latents, ref_latents, torch.zeros_like(ref_latents)], dim=0)
-        ref_len_3 = torch.cat([ref_latents_lengths, ref_latents_lengths, torch.zeros_like(ref_latents_lengths)], dim=0)
+        ref_3 = torch.cat(
+            [ref_latents, ref_latents, torch.zeros_like(ref_latents)], dim=0
+        )
+        ref_len_3 = torch.cat(
+            [
+                ref_latents_lengths,
+                ref_latents_lengths,
+                torch.zeros_like(ref_latents_lengths),
+            ],
+            dim=0,
+        )
         mask_3 = mask.repeat(3, 1)
         ph_3 = torch.cat([phonemes, torch.zeros_like(phonemes), phonemes], dim=0)
-        ph_mask_3 = torch.cat([phonemes_mask, torch.zeros_like(phonemes_mask).to(dtype=torch.bool), phonemes_mask], dim=0)
+        ph_mask_3 = torch.cat(
+            [
+                phonemes_mask,
+                torch.zeros_like(phonemes_mask).to(dtype=torch.bool),
+                phonemes_mask,
+            ],
+            dim=0,
+        )
         t_3 = t.repeat(3)
         vel_3 = model(x_t_3, ref_3, ref_len_3, mask_3, ph_3, ph_mask_3, t_3)
         v_cond, v_uncond_text, v_uncond_spk = vel_3.chunk(3, dim=0)
-        velocity = v_cond + cfg_scale_text * (v_cond - v_uncond_text) + cfg_scale_speaker * (v_cond - v_uncond_spk)
+        velocity = (
+            v_cond
+            + cfg_scale_text * (v_cond - v_uncond_text)
+            + cfg_scale_speaker * (v_cond - v_uncond_spk)
+        )
     elif get_stacked_transformer_features:
         velocity, stacked_features = model(
-            x_t, ref_latents, ref_latents_lengths, mask,
-            phonemes, phonemes_mask, t,
+            x_t,
+            ref_latents,
+            ref_latents_lengths,
+            mask,
+            phonemes,
+            phonemes_mask,
+            t,
             get_stacked_transformer_features=True,
         )
     else:
         velocity = model(
-            x_t, ref_latents, ref_latents_lengths, mask,
-            phonemes, phonemes_mask, t,
+            x_t,
+            ref_latents,
+            ref_latents_lengths,
+            mask,
+            phonemes,
+            phonemes_mask,
+            t,
         )
     alpha_t, sigma_t = get_alpha_sigma(t)
     alpha_t = alpha_t.view(-1, 1, 1)
@@ -111,7 +142,9 @@ if __name__ == "__main__":
     student.dit.gradient_checkpointing = True
     student_scorer = DiTModel(64).to(accelerator.device)
     teacher = DiTModel(64).to(accelerator.device)
-    discriminator = Discriminator(64, transformer_dim=1024, ref_dim=1024).to(accelerator.device)
+    discriminator = Discriminator(64, transformer_dim=1024, ref_dim=1024).to(
+        accelerator.device
+    )
     asr = ASR(64).to(accelerator.device)
     sv = SV(192).to(accelerator.device)
     ctc_loss = CTCLoss(blank=0, zero_infinity=True)

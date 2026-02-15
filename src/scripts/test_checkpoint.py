@@ -83,14 +83,18 @@ if __name__ == "__main__":
 
     noised = torch.randn(batch_size, seq_len, 64, device=device)
     ref_latents = torch.randn(batch_size, ref_seq_len, 64, device=device)
-    ref_latents_lengths = torch.full((batch_size,), ref_seq_len, dtype=torch.int64, device=device)
+    ref_latents_lengths = torch.full(
+        (batch_size,), ref_seq_len, dtype=torch.int64, device=device
+    )
     mask = torch.ones(batch_size, seq_len, dtype=torch.bool, device=device)
     phonemes = torch.randint(0, 50, (batch_size, phoneme_len), device=device)
     phonemes_mask = torch.ones_like(phonemes, dtype=torch.bool)
     t = torch.rand(batch_size, device=device)
 
     with torch.inference_mode():
-        velocity = model(noised, ref_latents, ref_latents_lengths, mask, phonemes, phonemes_mask, t)
+        velocity = model(
+            noised, ref_latents, ref_latents_lengths, mask, phonemes, phonemes_mask, t
+        )
 
     print(f"output shape: {velocity.shape}")
     assert velocity.shape == (batch_size, seq_len, 64)
@@ -98,7 +102,9 @@ if __name__ == "__main__":
 
     print("\ntesting cached inference...")
     with torch.inference_mode():
-        cached = model.encode_conditions(ref_latents, ref_latents_lengths, phonemes, phonemes_mask, seq_len)
+        cached = model.encode_conditions(
+            ref_latents, ref_latents_lengths, phonemes, phonemes_mask, seq_len
+        )
         velocity_cached = model.denoise_step(noised, mask, t, cached)
 
     print(f"cached output shape: {velocity_cached.shape}")
@@ -107,7 +113,16 @@ if __name__ == "__main__":
 
     print("\ntesting stacked transformer features...")
     with torch.inference_mode():
-        velocity, stacked = model(noised, ref_latents, ref_latents_lengths, mask, phonemes, phonemes_mask, t, get_stacked_transformer_features=True)
+        velocity, stacked = model(
+            noised,
+            ref_latents,
+            ref_latents_lengths,
+            mask,
+            phonemes,
+            phonemes_mask,
+            t,
+            get_stacked_transformer_features=True,
+        )
 
     print(f"velocity shape: {velocity.shape}")
     print(f"stacked features shape: {stacked.shape}")

@@ -1,6 +1,7 @@
 from typing import Tuple
 
 import torch.multiprocessing
+
 torch.multiprocessing.set_sharing_strategy("file_system")
 
 import jaxtyping
@@ -59,7 +60,7 @@ if __name__ == "__main__":
                 continue
             for prefix in ("module.", "_orig_mod.", "ema_model.", "online_model."):
                 while k.startswith(prefix):
-                    k = k[len(prefix):]
+                    k = k[len(prefix) :]
             cleaned[k] = v
         model.load_state_dict(cleaned, strict=False)
     model.dit = torch.compile(model.dit, dynamic=True)
@@ -82,6 +83,7 @@ if __name__ == "__main__":
     )
 
     from ema_pytorch import EMA
+
     ema = EMA(model, beta=0.9999, update_every=1)
 
     train = iter(train_loader)
@@ -104,7 +106,9 @@ if __name__ == "__main__":
 
         latents_lengths = batch["latents_lengths"].to(accelerator.device)
 
-        text_cfg_mask = torch.rand(batch_size, device=accelerator.device) < TEXT_CFG_DROP
+        text_cfg_mask = (
+            torch.rand(batch_size, device=accelerator.device) < TEXT_CFG_DROP
+        )
         phonemes[text_cfg_mask] = 0
         phonemes_mask[text_cfg_mask] = False
 
@@ -112,7 +116,9 @@ if __name__ == "__main__":
         ref_latents = batch["ref_latents"].to(accelerator.device)
         ref_latents_lengths = batch["ref_latents_lengths"].to(accelerator.device)
 
-        speaker_cfg_mask = torch.rand(batch_size, device=accelerator.device) < SPEAKER_CFG_DROP
+        speaker_cfg_mask = (
+            torch.rand(batch_size, device=accelerator.device) < SPEAKER_CFG_DROP
+        )
         ref_latents[speaker_cfg_mask] = 0
         ref_latents_lengths[speaker_cfg_mask] = 0
 
@@ -156,9 +162,12 @@ if __name__ == "__main__":
             raw = model
             while hasattr(raw, "module"):
                 raw = raw.module
-            torch.save(raw.state_dict(), "assets/teacher_checkpoints/checkpoint_latest.pt")
             torch.save(
-                ema.ema_model.state_dict(), "assets/teacher_checkpoints/checkpoint_ema.pt"
+                raw.state_dict(), "assets/teacher_checkpoints/checkpoint_latest.pt"
+            )
+            torch.save(
+                ema.ema_model.state_dict(),
+                "assets/teacher_checkpoints/checkpoint_ema.pt",
             )
 
         del batch, noised, mask, velocity, true_velocity, loss
