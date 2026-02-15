@@ -3,8 +3,8 @@ use tokio::process::Command;
 
 pub async fn phonemize(text: &str) -> Result<Vec<i64>> {
     let output = Command::new("uv")
-        .args(["run", "python", "scripts/phonemize.py", text])
-        .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/.."))
+        .args(["run", "python", "src/scripts/phonemize.py", text])
+        .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
         .env(
             "PHONEMIZER_ESPEAK_LIBRARY",
             "/opt/homebrew/lib/libespeak.dylib",

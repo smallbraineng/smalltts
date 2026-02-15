@@ -21,13 +21,11 @@ class TimeEmbedding(nn.Module):
 
     @jaxtyped(typechecker=beartype)
     def forward(self, t: Float[Tensor, " batch"]) -> Float[Tensor, "batch length"]:
-        # sinusoidal
         half = self.dim // 2
         emb = math.log(1e4) / (half - 1)
         emb = torch.exp(torch.arange(half, device=t.device).float() * -emb)
-        emb = 1e3 * t.unsqueeze(1) * emb.unsqueeze(0)  # scale by 1_000
+        emb = 1e3 * t.unsqueeze(1) * emb.unsqueeze(0)
         emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
-        # mlp
         emb = self.mlp(emb)
         return emb
 
@@ -35,21 +33,21 @@ class TimeEmbedding(nn.Module):
 class DiTModel(nn.Module):
     def __init__(self, latent_dim: int):
         super().__init__()
-        hidden_dim = 768
-        phoneme_dim = 384
+        hidden_dim = 960
+        phoneme_dim = 512
 
         self.time_embedding = TimeEmbedding(hidden_dim)
         self.phoneme_embedding = TextEncoder(
             vocab_size=phoneme_len,
             model_size=phoneme_dim,
-            num_layers=6,
-            num_heads=6,
-            intermediate_size=768,
+            num_layers=8,
+            num_heads=4,
+            intermediate_size=1024,
             norm_eps=1e-6,
         )
 
         self.style_encoder = StyleEncoder(out_dim=hidden_dim)
-        self.dit = DiT(latent_dim, phoneme_dim, hidden_dim, 18)
+        self.dit = DiT(latent_dim, phoneme_dim, hidden_dim, 12)
         self.velocity = nn.Linear(hidden_dim, latent_dim)
 
         nn.init.constant_(self.velocity.weight, 0)
@@ -102,7 +100,6 @@ class DiTModel(nn.Module):
         return self.velocity(decoded)
 
 
-# Keep backward compat alias
 Backbone = DiTModel
 
 
@@ -141,13 +138,7 @@ def test_forward_backward():
 
     start_time = time.time()
     output = model(
-        noised,
-        ref_latents,
-        ref_latents_lengths,
-        mask,
-        phonemes,
-        phonemes_mask,
-        t,
+        noised, ref_latents, ref_latents_lengths, mask, phonemes, phonemes_mask, t
     )
     end_time = time.time()
     print(f"time taken for model forward pass: {end_time - start_time:.4f} seconds")
@@ -157,14 +148,12 @@ def test_forward_backward():
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
     optimizer.zero_grad()
-
     loss.backward()
     optimizer.step()
 
     print(f"forward pass successful! output shape: {output.shape}")
     print(f"loss: {loss.item():.4f}")
     print("backward pass completed successfully!")
-
     return output, loss
 
 

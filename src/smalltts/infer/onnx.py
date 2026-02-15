@@ -1,4 +1,4 @@
-"""ONNX inference using condition_encoder + denoiser split (DMD 4-step)."""
+"""ONNX inference using condition_encoder + denoiser split (DMD 4-step, per-layer KV)."""
 
 from typing import Iterable, List, Optional
 
@@ -12,6 +12,11 @@ SAMPLE_RATE = 24_000
 HOP_SIZE = 3_200
 NUM_STEPS = 4
 GUIDANCE_SCALE = 2.0
+CHARS_PER_SECOND = 10.0
+
+
+def estimate_duration(text: str, min_sec: float = 0.5, max_sec: float = 30.0) -> float:
+    return max(min_sec, min(len(text) / CHARS_PER_SECOND, max_sec))
 
 
 def _make_session(path: str, providers: list[str]) -> ort.InferenceSession:
@@ -44,7 +49,7 @@ def _compute_rope_freqs(seq_len: int, dim: int = 64) -> np.ndarray:
 
 
 class SmallTTS:
-    """DMD 4-step inference using condition_encoder + denoiser ONNX split."""
+    """DMD 4-step inference using condition_encoder + denoiser ONNX split (per-layer KV)."""
 
     def __init__(
         self,
@@ -78,33 +83,36 @@ class SmallTTS:
             Audio samples, shape (1, samples), float32, 24kHz.
         """
         seq_len = max(1, int(duration_sec * SAMPLE_RATE / HOP_SIZE))
-        ref = ref_latents[np.newaxis].astype(np.float32)  # (1, ref_T, 64)
+        ref = ref_latents[np.newaxis].astype(np.float32)
         ref_len = np.array([ref.shape[1]], dtype=np.int64)
 
-        phonemes = np.array([phoneme_ids], dtype=np.int64)  # (1, P)
+        phonemes = np.array([phoneme_ids], dtype=np.int64)
         phonemes_mask = np.ones_like(phonemes, dtype=np.bool_)
 
-        # Condition encode: cond + uncond (for CFG)
+        # condition encode: cond + uncond (for CFG)
+        # outputs are 5D: (N_LAYERS, batch, heads, seq, dim_head)
         cond_feed = dict(
             zip(self.cond_enc_names, [ref, ref_len, phonemes, phonemes_mask])
         )
-        k_ref, v_ref, ref_mask, k_text, v_text = self.cond_enc.run(None, cond_feed)
+        all_k_ref, all_v_ref, ref_mask, all_k_text, all_v_text = self.cond_enc.run(
+            None, cond_feed
+        )
 
         uncond_feed = {
             **cond_feed,
             self.cond_enc_names[2]: np.zeros_like(phonemes),
             self.cond_enc_names[3]: np.zeros_like(phonemes_mask),
         }
-        k_ref_u, v_ref_u, ref_mask_u, k_text_u, v_text_u = self.cond_enc.run(
-            None, uncond_feed
+        all_k_ref_u, all_v_ref_u, ref_mask_u, all_k_text_u, all_v_text_u = (
+            self.cond_enc.run(None, uncond_feed)
         )
 
-        # Batch cond+uncond along dim 0
-        k_ref_cat = np.concatenate([k_ref, k_ref_u])
-        v_ref_cat = np.concatenate([v_ref, v_ref_u])
-        ref_mask_cat = np.concatenate([ref_mask, ref_mask_u])
-        k_text_cat = np.concatenate([k_text, k_text_u])
-        v_text_cat = np.concatenate([v_text, v_text_u])
+        # batch cond+uncond along batch dim (axis=1 for 5D, axis=0 for 2D mask)
+        all_k_ref_cat = np.concatenate([all_k_ref, all_k_ref_u], axis=1)
+        all_v_ref_cat = np.concatenate([all_v_ref, all_v_ref_u], axis=1)
+        ref_mask_cat = np.concatenate([ref_mask, ref_mask_u], axis=0)
+        all_k_text_cat = np.concatenate([all_k_text, all_k_text_u], axis=1)
+        all_v_text_cat = np.concatenate([all_v_text, all_v_text_u], axis=1)
         phonemes_mask_cat = np.concatenate(
             [phonemes_mask, np.zeros_like(phonemes_mask)]
         )
@@ -114,7 +122,6 @@ class SmallTTS:
         mask_2 = np.concatenate([mask_1, mask_1])
         x_pred = np.zeros((1, seq_len, 64), dtype=np.float32)
 
-        # 4-step denoiser loop
         for t_val in np.linspace(1, 0, NUM_STEPS, dtype=np.float32):
             alpha, sigma = _get_alpha_sigma(float(t_val))
             noise = np.random.randn(1, seq_len, 64).astype(np.float32)
@@ -127,11 +134,11 @@ class SmallTTS:
                         np.concatenate([x_t, x_t]),
                         mask_2,
                         np.array([t_val, t_val], dtype=np.float32),
-                        k_ref_cat,
-                        v_ref_cat,
+                        all_k_ref_cat,
+                        all_v_ref_cat,
                         ref_mask_cat,
-                        k_text_cat,
-                        v_text_cat,
+                        all_k_text_cat,
+                        all_v_text_cat,
                         phonemes_mask_cat,
                         rope,
                     ],
@@ -142,10 +149,9 @@ class SmallTTS:
             velocity = vel_cond + GUIDANCE_SCALE * (vel_cond - vel_uncond)
             x_pred = (alpha * x_t - sigma * velocity).astype(np.float32)
 
-        # Decode latents -> audio
         dec_feed = {self.dec_names[0]: x_pred}
-        audio = self.codec_dec.run(None, dec_feed)[0]  # (1, 1, samples)
-        return audio[0]  # (1, samples)
+        audio = self.codec_dec.run(None, dec_feed)[0]
+        return audio[0]
 
     def forward(
         self,
@@ -154,17 +160,16 @@ class SmallTTS:
         texts: list,
         duration_sec: float = 3.0,
     ) -> List[Tensor]:
-        """Convenience wrapper matching the old SmallTTS API."""
         import torch
 
         from smalltts.data.phonemization.phonemes import get_token_ids
 
         results = []
-        for i, (cond, trans, text) in enumerate(
-            zip(conditionings, transcriptions, texts)
-        ):
+        for cond, trans, text in zip(conditionings, transcriptions, texts):
             trans_tok = (
-                get_token_ids(trans) if isinstance(trans, str) else list(map(int, trans))
+                get_token_ids(trans)
+                if isinstance(trans, str)
+                else list(map(int, trans))
             )
             text_tok = (
                 get_token_ids(text) if isinstance(text, str) else list(map(int, text))

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use ndarray::{Array1, Array2, Array3, Array4, Axis, concatenate, s};
+use ndarray::{Array1, Array2, Array3, Array5, Axis, concatenate, s};
 use ort::session::Session;
 use ort::value::TensorRef;
 use rand::rng;
@@ -20,7 +20,7 @@ pub struct Pipeline {
 
 impl Pipeline {
     pub fn load() -> Result<Self> {
-        let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../assets");
+        let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets");
         Ok(Self {
             codec_enc: Session::builder()?
                 .commit_from_file(format!("{base}/codec/encoder.onnx"))?,
@@ -95,11 +95,11 @@ impl Pipeline {
             TensorRef::from_array_view(mask)?,
         ])?;
         Ok(CondKV {
-            k_ref: extract4(&out[0])?,
-            v_ref: extract4(&out[1])?,
+            k_ref: extract5(&out[0])?,
+            v_ref: extract5(&out[1])?,
             ref_mask: extract_bool2(&out[2])?,
-            k_text: extract4(&out[3])?,
-            v_text: extract4(&out[4])?,
+            k_text: extract5(&out[3])?,
+            v_text: extract5(&out[4])?,
         })
     }
 
@@ -136,35 +136,36 @@ impl Pipeline {
 }
 
 struct CondKV {
-    k_ref: Array4<f32>,
-    v_ref: Array4<f32>,
+    k_ref: Array5<f32>,
+    v_ref: Array5<f32>,
     ref_mask: Array2<bool>,
-    k_text: Array4<f32>,
-    v_text: Array4<f32>,
+    k_text: Array5<f32>,
+    v_text: Array5<f32>,
 }
 
 struct BatchedKV {
-    k_ref: Array4<f32>,
-    v_ref: Array4<f32>,
+    k_ref: Array5<f32>,
+    v_ref: Array5<f32>,
     ref_mask: Array2<bool>,
-    k_text: Array4<f32>,
-    v_text: Array4<f32>,
+    k_text: Array5<f32>,
+    v_text: Array5<f32>,
     ph_mask: Array2<bool>,
 }
 
 impl BatchedKV {
     fn new(c: &CondKV, u: &CondKV, cm: &Array2<bool>, um: &Array2<bool>) -> Self {
-        let c4 =
-            |a: &Array4<f32>, b: &Array4<f32>| concatenate(Axis(0), &[a.view(), b.view()]).unwrap();
+        // 5D KV shape: (n_layers, batch, heads, seq, dim_head) -- concat on batch axis=1
+        let c5 =
+            |a: &Array5<f32>, b: &Array5<f32>| concatenate(Axis(1), &[a.view(), b.view()]).unwrap();
         let c2 = |a: &Array2<bool>, b: &Array2<bool>| {
             concatenate(Axis(0), &[a.view(), b.view()]).unwrap()
         };
         Self {
-            k_ref: c4(&c.k_ref, &u.k_ref),
-            v_ref: c4(&c.v_ref, &u.v_ref),
+            k_ref: c5(&c.k_ref, &u.k_ref),
+            v_ref: c5(&c.v_ref, &u.v_ref),
             ref_mask: c2(&c.ref_mask, &u.ref_mask),
-            k_text: c4(&c.k_text, &u.k_text),
-            v_text: c4(&c.v_text, &u.v_text),
+            k_text: c5(&c.k_text, &u.k_text),
+            v_text: c5(&c.v_text, &u.v_text),
             ph_mask: c2(cm, um),
         }
     }
@@ -178,14 +179,15 @@ fn extract3(val: &ort::value::DynValue) -> Result<Array3<f32>> {
     )?)
 }
 
-fn extract4(val: &ort::value::DynValue) -> Result<Array4<f32>> {
+fn extract5(val: &ort::value::DynValue) -> Result<Array5<f32>> {
     let (shape, data) = val.try_extract_tensor::<f32>()?;
-    Ok(Array4::from_shape_vec(
+    Ok(Array5::from_shape_vec(
         (
             shape[0] as usize,
             shape[1] as usize,
             shape[2] as usize,
             shape[3] as usize,
+            shape[4] as usize,
         ),
         data.to_vec(),
     )?)

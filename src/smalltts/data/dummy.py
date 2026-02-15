@@ -32,9 +32,7 @@ def dummy_collate_fn(
         length = random.randint(8, 64)
         seq = torch.randn(length, 64)
         ref_latents.append(seq)
-    ref_latents_lengths = torch.tensor(
-        [len(r) for r in ref_latents], dtype=torch.int64
-    )
+    ref_latents_lengths = torch.tensor([len(r) for r in ref_latents], dtype=torch.int64)
     ref_latents = pad_sequence(ref_latents, batch_first=True, padding_value=0.0)
 
     return {

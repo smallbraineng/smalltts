@@ -48,8 +48,8 @@ class Discriminator(nn.Module):
     def __init__(
         self,
         latent_dim: int,
-        transformer_dim: int = 768,
-        ref_dim: int = 768,
+        transformer_dim: int = 960,
+        ref_dim: int = 960,
     ):
         super().__init__()
         self.transformer_dim = transformer_dim

@@ -1,4 +1,4 @@
-# Note: If you are on a mac, use the --cpu flag in accelerate `uv run accelerate launch --cpu scripts/train/asr.py`
+# Note: If you are on a mac, use the --cpu flag in accelerate `uv run accelerate launch --cpu src/scripts/train/dmd2/asr.py`
 import torch
 from accelerate.accelerator import Accelerator
 from torch import nn

@@ -19,7 +19,7 @@ expressive tts that can clone any voice
 
 ```bash
 git clone https://github.com/smallbraineng/smalltts && cd smalltts
-uv run python scripts/tryme.py "Hello from smallTTS!"
+uv run python src/scripts/tryme.py "Hello from smallTTS!"
 ```
 
 uses [uv](https://github.com/astral-sh/uv) for setup.
@@ -27,7 +27,7 @@ uses [uv](https://github.com/astral-sh/uv) for setup.
 ### interactive (realtime on cpu)
 
 ```bash
-uv run python scripts/infer/interactive.py
+uv run python src/scripts/infer/interactive.py
 ```
 
 ### install as a package
@@ -46,13 +46,13 @@ tts = SmallTTS()
 #### batch inference
 
 ```bash
-uv run python scripts/infer/batch.py
+uv run python src/scripts/infer/batch.py
 ```
 
 #### voice cloning
 
 ```bash
-uv run python scripts/infer/clone.py \
+uv run python src/scripts/infer/clone.py \
   --wav assets/test_audio/1.wav \
   --transcription "the reference transcription here" \
   --text "what you want it to say"
@@ -82,11 +82,11 @@ checkpoints live on huggingface: [smallbraineng/smalltts](https://huggingface.co
 | asr_checkpoints | [assets/asr_checkpoints](https://huggingface.co/smallbraineng/smalltts/tree/main/assets/asr_checkpoints) |
 | sv_checkpoints | [assets/sv_checkpoints](https://huggingface.co/smallbraineng/smalltts/tree/main/assets/sv_checkpoints) |
 
-from-scratch training order, in `scripts/train`:
-1. teacher model (128 steps): `uv run accelerate launch scripts/train/teacher.py`
-2. dmd2 distillation (4 steps): `uv run accelerate launch scripts/train/dmd2/distill.py`
-3. speaker verification: `uv run accelerate launch scripts/train/dmd2/sv.py`
-4. asr: `uv run accelerate launch scripts/train/dmd2/asr.py`
+from-scratch training order, in `src/scripts/train`:
+1. teacher model (128 steps): `uv run accelerate launch src/scripts/train/teacher.py`
+2. dmd2 distillation (4 steps): `uv run accelerate launch src/scripts/train/dmd2/distill.py`
+3. speaker verification: `uv run accelerate launch src/scripts/train/dmd2/sv.py`
+4. asr: `uv run accelerate launch src/scripts/train/dmd2/asr.py`
 
 ### method
 - teacher is a diffusion tts model generating audio in 128 sampling steps
@@ -102,7 +102,7 @@ from-scratch training order, in `scripts/train`:
 
 ## inference
 
-use onnx exports for production inference, download from huggingface, see `infer/` for examples
+use onnx exports for production inference, download from huggingface, see `src/scripts/infer/` for examples
 
 | model | download |
 | --- | --- |
