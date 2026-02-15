@@ -12,7 +12,7 @@ SAMPLE_RATE = 24_000
 HOP_SIZE = 3_200
 NUM_STEPS = 4
 GUIDANCE_SCALE = 2.0
-CHARS_PER_SECOND = 14.0
+CHARS_PER_SECOND = 10.0
 
 
 def estimate_duration(text: str, min_sec: float = 0.5, max_sec: float = 30.0) -> float:
