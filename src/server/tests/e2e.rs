@@ -39,7 +39,7 @@ fn sine_wav(duration_sec: f32, sample_rate: u32) -> Vec<u8> {
 
 async fn start_server(port: u16) {
     tokio::spawn(async move {
-        let x402 = x402_axum::X402Middleware::try_from("https://facilitator.x402.rs").unwrap();
+        let x402 = x402_axum::X402Middleware::try_from("https://pay.openfacilitator.io").unwrap();
 
         let app = axum::Router::new()
             .route("/health", axum::routing::get(|| async { "ok" }))

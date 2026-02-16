@@ -10,6 +10,7 @@ use axum::{
 };
 use serde::Deserialize;
 use tokio::sync::Mutex;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tracing_subscriber::EnvFilter;
 use x402_axum::X402Middleware;
@@ -32,7 +33,7 @@ async fn main() -> Result<()> {
         .init();
 
     let facilitator_url = std::env::var("FACILITATOR_URL")
-        .unwrap_or_else(|_| "https://facilitator.x402.rs".to_string());
+        .unwrap_or_else(|_| "https://pay.openfacilitator.io".to_string());
     let payment_address: Address = std::env::var("PAYMENT_ADDRESS")
         .unwrap_or_else(|_| "0xBAc675C310721717Cd4A37F6cbeA1F081b1C2a07".to_string())
         .parse()
@@ -71,13 +72,20 @@ async fn main() -> Result<()> {
                     async move {
                         vec![V2Eip155Exact::price_tag(
                             payment_address,
-                            USDC::base_sepolia().amount(amount),
+                            USDC::base().amount(amount),
                         )]
                     }
                 },
             )),
         )
         .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any)
+                .expose_headers(Any),
+        )
         .with_state(state);
 
     let addr = format!("0.0.0.0:{port}");

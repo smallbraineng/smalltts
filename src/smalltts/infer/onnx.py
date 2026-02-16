@@ -1,4 +1,4 @@
-"""ONNX inference using condition_encoder + denoiser split (DMD 4-step, per-layer KV)."""
+"""ONNX inference using condition_encoder + denoiser split (DMD 4-step, no CFG)."""
 
 from typing import Iterable, List, Optional
 
@@ -11,8 +11,7 @@ from smalltts.codec.onnx import _default_providers as default_providers
 SAMPLE_RATE = 24_000
 HOP_SIZE = 3_200
 NUM_STEPS = 4
-GUIDANCE_SCALE = 2.0
-CHARS_PER_SECOND = 10.0
+CHARS_PER_SECOND = 11.5
 
 
 def estimate_duration(text: str, min_sec: float = 0.5, max_sec: float = 30.0) -> float:
@@ -49,7 +48,7 @@ def _compute_rope_freqs(seq_len: int, dim: int = 64) -> np.ndarray:
 
 
 class SmallTTS:
-    """DMD 4-step inference using condition_encoder + denoiser ONNX split (per-layer KV)."""
+    """DMD 4-step inference using condition_encoder + denoiser ONNX split (no CFG)."""
 
     def __init__(
         self,
@@ -89,8 +88,6 @@ class SmallTTS:
         phonemes = np.array([phoneme_ids], dtype=np.int64)
         phonemes_mask = np.ones_like(phonemes, dtype=np.bool_)
 
-        # condition encode: cond + uncond (for CFG)
-        # outputs are 5D: (N_LAYERS, batch, heads, seq, dim_head)
         cond_feed = dict(
             zip(self.cond_enc_names, [ref, ref_len, phonemes, phonemes_mask])
         )
@@ -98,28 +95,8 @@ class SmallTTS:
             None, cond_feed
         )
 
-        uncond_feed = {
-            **cond_feed,
-            self.cond_enc_names[2]: np.zeros_like(phonemes),
-            self.cond_enc_names[3]: np.zeros_like(phonemes_mask),
-        }
-        all_k_ref_u, all_v_ref_u, ref_mask_u, all_k_text_u, all_v_text_u = (
-            self.cond_enc.run(None, uncond_feed)
-        )
-
-        # batch cond+uncond along batch dim (axis=1 for 5D, axis=0 for 2D mask)
-        all_k_ref_cat = np.concatenate([all_k_ref, all_k_ref_u], axis=1)
-        all_v_ref_cat = np.concatenate([all_v_ref, all_v_ref_u], axis=1)
-        ref_mask_cat = np.concatenate([ref_mask, ref_mask_u], axis=0)
-        all_k_text_cat = np.concatenate([all_k_text, all_k_text_u], axis=1)
-        all_v_text_cat = np.concatenate([all_v_text, all_v_text_u], axis=1)
-        phonemes_mask_cat = np.concatenate(
-            [phonemes_mask, np.zeros_like(phonemes_mask)]
-        )
-
         rope = _compute_rope_freqs(seq_len)
-        mask_1 = np.ones((1, seq_len), dtype=np.bool_)
-        mask_2 = np.concatenate([mask_1, mask_1])
+        mask = np.ones((1, seq_len), dtype=np.bool_)
         x_pred = np.zeros((1, seq_len, 64), dtype=np.float32)
 
         for t_val in np.linspace(1, 0, NUM_STEPS, dtype=np.float32):
@@ -131,22 +108,20 @@ class SmallTTS:
                 zip(
                     self.den_names,
                     [
-                        np.concatenate([x_t, x_t]),
-                        mask_2,
-                        np.array([t_val, t_val], dtype=np.float32),
-                        all_k_ref_cat,
-                        all_v_ref_cat,
-                        ref_mask_cat,
-                        all_k_text_cat,
-                        all_v_text_cat,
-                        phonemes_mask_cat,
+                        x_t,
+                        mask,
+                        np.array([t_val], dtype=np.float32),
+                        all_k_ref,
+                        all_v_ref,
+                        ref_mask,
+                        all_k_text,
+                        all_v_text,
+                        phonemes_mask,
                         rope,
                     ],
                 )
             )
-            vel = self.denoiser.run(None, den_feed)[0]
-            vel_cond, vel_uncond = vel[:1], vel[1:]
-            velocity = vel_cond + GUIDANCE_SCALE * (vel_cond - vel_uncond)
+            velocity = self.denoiser.run(None, den_feed)[0]
             x_pred = (alpha * x_t - sigma * velocity).astype(np.float32)
 
         dec_feed = {self.dec_names[0]: x_pred}

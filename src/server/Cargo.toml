@@ -3,8 +3,17 @@ name = "smalltts-server"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"
+
+[[bin]]
+name = "test_x402"
+path = "src/bin/test_x402.rs"
+
 [dependencies]
 alloy-primitives = "1.4"
+alloy-signer-local = "1.4"
 anyhow = "1"
 axum = { version = "0.8", features = ["multipart"] }
 hound = "3"
@@ -12,21 +21,20 @@ ndarray = "0.17"
 ort = { version = "2.0.0-rc.11", features = ["load-dynamic"] }
 rand = "0.9"
 rand_distr = "0.5"
+reqwest = { version = "0.13", features = ["multipart", "json"] }
+reqwest-middleware = { version = "0.5", features = ["multipart"] }
 rubato = "0.16"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 symphonia = { version = "0.5", features = ["all"] }
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.6", features = ["limit"] }
+tower-http = { version = "0.6", features = ["cors", "limit"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 x402-axum = "1.1"
-x402-chain-eip155 = { version = "1.1", features = ["server"] }
+x402-chain-eip155 = { version = "1.1", features = ["server", "client"] }
+x402-reqwest = "1.1"
 x402-types = "1.1"
 
 [dev-dependencies]
-alloy-signer-local = "1.4"
 base64 = "0.22"
-reqwest = { version = "0.13", features = ["multipart", "json"] }
-x402-chain-eip155 = { version = "1.1", features = ["client"] }
-x402-reqwest = "1.1"

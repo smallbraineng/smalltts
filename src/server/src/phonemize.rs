@@ -2,13 +2,13 @@ use anyhow::{Context, Result, bail};
 use tokio::process::Command;
 
 pub async fn phonemize(text: &str) -> Result<Vec<i64>> {
+    let espeak_library = std::env::var("PHONEMIZER_ESPEAK_LIBRARY")
+        .unwrap_or_else(|_| "/opt/homebrew/lib/libespeak.dylib".to_string());
+
     let output = Command::new("uv")
         .args(["run", "python", "src/scripts/phonemize.py", text])
         .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
-        .env(
-            "PHONEMIZER_ESPEAK_LIBRARY",
-            "/opt/homebrew/lib/libespeak.dylib",
-        )
+        .env("PHONEMIZER_ESPEAK_LIBRARY", espeak_library)
         .output()
         .await
         .context("failed to spawn phonemize process")?;
