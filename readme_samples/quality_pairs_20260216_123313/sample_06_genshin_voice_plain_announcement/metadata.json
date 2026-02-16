@@ -1,0 +1,18 @@
+{
+  "sample_index": 6,
+  "dataset": "genshin-voice",
+  "source_text": "(That's Chuychu's signal... Heh, smart idea. Alright, time to move.)",
+  "prompt_id": "plain_announcement",
+  "generated_text": "new episodes drop every friday at nine in the evening.",
+  "nonverbal_prompt": false,
+  "seed": 20260222,
+  "num_steps": 4,
+  "latents_length": 47,
+  "ref_latents_length": 56,
+  "speaker_id": "Chasca",
+  "ref_speaker_id": "Chasca",
+  "source_url": "",
+  "source_key": "",
+  "original_path": "test_outputs/quality_pairs_20260216_123313/sample_06_genshin_voice_plain_announcement/original.wav",
+  "generated_path": "test_outputs/quality_pairs_20260216_123313/sample_06_genshin_voice_plain_announcement/generated.wav"
+}

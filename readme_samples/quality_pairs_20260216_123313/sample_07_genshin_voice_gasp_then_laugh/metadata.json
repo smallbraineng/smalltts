@@ -1,0 +1,18 @@
+{
+  "sample_index": 7,
+  "dataset": "genshin-voice",
+  "source_text": "The only thing I can do now is... well, take care of this exhausted little Lavender Melon.",
+  "prompt_id": "gasp_then_laugh",
+  "generated_text": "wow [gasp] i did not expect that [laughter].",
+  "nonverbal_prompt": true,
+  "seed": 20260223,
+  "num_steps": 4,
+  "latents_length": 42,
+  "ref_latents_length": 47,
+  "speaker_id": "Arataki Itto",
+  "ref_speaker_id": "Arataki Itto",
+  "source_url": "",
+  "source_key": "",
+  "original_path": "test_outputs/quality_pairs_20260216_123313/sample_07_genshin_voice_gasp_then_laugh/original.wav",
+  "generated_path": "test_outputs/quality_pairs_20260216_123313/sample_07_genshin_voice_gasp_then_laugh/generated.wav"
+}

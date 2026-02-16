@@ -1,0 +1,18 @@
+{
+  "sample_index": 8,
+  "dataset": "pony",
+  "source_text": "Let's borrow that for you and keep looking.",
+  "prompt_id": "sniff",
+  "generated_text": "i think i am getting a cold [sniff] [sniff].",
+  "nonverbal_prompt": true,
+  "seed": 20260224,
+  "num_steps": 4,
+  "latents_length": 17,
+  "ref_latents_length": 13,
+  "speaker_id": "Twilight Sparkle",
+  "ref_speaker_id": "Twilight Sparkle",
+  "source_url": "",
+  "source_key": "",
+  "original_path": "test_outputs/quality_pairs_20260216_123313/sample_08_pony_sniff/original.wav",
+  "generated_path": "test_outputs/quality_pairs_20260216_123313/sample_08_pony_sniff/generated.wav"
+}
