@@ -23,8 +23,8 @@ mod pipeline;
 
 type SharedPipeline = Arc<Mutex<pipeline::Pipeline>>;
 
-// $0.05 per minute = 50000 USDC smallest units (6 decimals) per 60 seconds
-const RATE_PER_SECOND: u64 = 833; // ceil(50000 / 60)
+// $0.01 per minute = 10000 USDC smallest units (6 decimals) per 60 seconds
+const RATE_PER_SECOND: u64 = 167; // ceil(10000 / 60)
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -160,7 +160,7 @@ async fn discovery() -> impl IntoResponse {
     axum::Json(serde_json::json!({
         "version": 1,
         "resources": [format!("{base}/synthesize")],
-        "instructions": "# smalltts\n\nText-to-speech API. POST /synthesize?duration=N with multipart audio + text.\n\nPricing: $0.05/min of generated audio."
+        "instructions": "# smalltts\n\nText-to-speech API. POST /synthesize?duration=N with multipart audio + text.\n\nPricing: $0.01/min of generated audio."
     }))
 }
 

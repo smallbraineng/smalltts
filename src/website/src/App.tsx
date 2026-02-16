@@ -3,7 +3,7 @@ import { usePrivy, useWallets, useX402Fetch } from "@privy-io/react-auth";
 
 const API_URL =
   import.meta.env.VITE_API_URL || "https://smalltts-service.smallbrain.xyz";
-const RATE_PER_MIN = 0.05;
+const RATE_PER_MIN = 0.01;
 
 export default function App() {
   const { ready, authenticated, login, logout, user } = usePrivy();
@@ -18,6 +18,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [showSamples, setShowSamples] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
   const cost = ((duration / 60) * RATE_PER_MIN).toFixed(4);
@@ -90,7 +91,7 @@ export default function App() {
               href="https://github.com/smallbraineng/smalltts"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-gray-400 hover:text-black"
+              className="text-black"
             >
               <svg
                 width="18"
@@ -104,7 +105,7 @@ export default function App() {
             {authenticated ? (
               <button
                 onClick={logout}
-                className="text-xs border border-gray-300 px-3 py-1.5 hover:bg-gray-50"
+                className="text-sm border border-black px-3 py-1.5 hover:bg-gray-100"
               >
                 {user?.wallet?.address?.slice(0, 6)}...
                 {user?.wallet?.address?.slice(-4)} &middot; disconnect
@@ -112,40 +113,114 @@ export default function App() {
             ) : (
               <button
                 onClick={login}
-                className="text-xs border border-black px-3 py-1.5 hover:bg-gray-100"
+                className="text-sm border border-black px-3 py-1.5 hover:bg-gray-100"
               >
                 connect wallet
               </button>
             )}
           </div>
         </div>
-        <p className="text-sm text-gray-500 mb-10">
+        <p className="text-sm text-black mb-4">
           a superfast text to speech model for expressive realtime characters.
           <br />
           can [cough], [groan] and even [laughter].
         </p>
+        <p className="text-sm bg-black text-white inline-block px-2 py-1 mb-2">$0.01/min &middot; USDC on Base</p>
+        <p className="text-sm text-black mb-8">
+          x402 url:{" "}
+          <a href={`${API_URL}/synthesize`} target="_blank" rel="noopener noreferrer" className="underline">{API_URL}/synthesize</a>
+        </p>
+
+        {/* about */}
+        <ul className="text-sm text-black space-y-1.5 mb-8 list-disc list-inside">
+          <li>
+            diffusion transformer backbone (a la{" "}
+            <a href="https://arxiv.org/abs/2410.03637" target="_blank" rel="noopener noreferrer" className="underline">Echo TTS</a>,{" "}
+            <a href="https://arxiv.org/abs/2410.06885" target="_blank" rel="noopener noreferrer" className="underline">F5-TTS</a>)
+          </li>
+          <li>
+            predicts{" "}
+            <a href="https://github.com/microsoft/VibeVoice" target="_blank" rel="noopener noreferrer" className="underline">VibeVoice</a>{" "}
+            latents
+          </li>
+          <li>
+            distilled to 4 diffusion steps with{" "}
+            <a href="https://arxiv.org/abs/2405.14867" target="_blank" rel="noopener noreferrer" className="underline">DMD2</a>
+          </li>
+        </ul>
+
+        {/* usage tips */}
+        <p className="text-sm text-black mb-1.5">usage:</p>
+        <ul className="text-sm text-black space-y-1.5 mb-8 list-disc list-inside">
+          <li>use clean reference audio for best voice cloning results</li>
+          <li>sensitive to duration parameter: set it close to expected output length</li>
+        </ul>
+
+        {/* samples */}
+        <button
+          onClick={() => setShowSamples(!showSamples)}
+          className="text-sm text-black flex items-center gap-1 mb-8"
+        >
+          <span className="inline-block transition-transform" style={{ transform: showSamples ? "rotate(90deg)" : "rotate(0deg)" }}>&#9654;</span>
+          {showSamples ? "hide samples" : "view samples"}
+        </button>
+        {showSamples && (
+          <div className="space-y-4 mb-8">
+            {[
+              { text: "that joke is good [laughter] [laughter] and i cannot stop laughing.", folder: "sample_02_pony_laughter" },
+              { text: "new episodes drop every friday at nine in the evening.", folder: "sample_06_genshin_voice_plain_announcement" },
+              { text: "wow [gasp] i did not expect that [laughter].", folder: "sample_07_genshin_voice_gasp_then_laugh" },
+              { text: "i think i am getting a cold [sniff] [sniff].", folder: "sample_08_pony_sniff" },
+              { text: "okay [cough] that was rough [sigh] but we are still going.", folder: "sample_10_genshin_voice_mixed_events" },
+            ].map((s) => (
+              <div key={s.folder}>
+                <p className="text-sm text-black mb-1.5">{s.text}</p>
+                <div className="flex items-center gap-3">
+                  <div className="flex-1">
+                    <p className="text-sm text-black mb-0.5">ref</p>
+                    <audio
+                      src={`https://github.com/smallbraineng/smalltts/raw/main/readme_samples/quality_pairs_20260216_123313/${s.folder}/original.wav`}
+                      controls
+                      preload="none"
+                      className="w-full h-8"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm text-black mb-0.5">gen</p>
+                    <audio
+                      src={`https://github.com/smallbraineng/smalltts/raw/main/readme_samples/quality_pairs_20260216_123313/${s.folder}/generated.wav`}
+                      controls
+                      preload="none"
+                      className="w-full h-8"
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {!authenticated ? (
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-black">
             connect a wallet to get started. you need USDC on Base.
           </p>
         ) : (
           <div className="space-y-6">
             {/* text input */}
             <div>
-              <label className="block text-xs text-gray-500 mb-1">text</label>
+              <label className="block text-sm text-black mb-1">text</label>
               <textarea
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 rows={3}
-                className="w-full border border-gray-300 px-3 py-2 text-sm resize-none focus:outline-none focus:border-black"
+                className="w-full border border-black px-3 py-2 text-sm resize-none focus:outline-none"
                 placeholder="enter text to synthesize..."
               />
             </div>
 
             {/* duration */}
             <div>
-              <label className="block text-xs text-gray-500 mb-1">
+              <label className="block text-sm text-black mb-1">
                 duration: {duration}s &middot; ${cost}
               </label>
               <input
@@ -157,7 +232,7 @@ export default function App() {
                 onChange={(e) => setDuration(parseFloat(e.target.value))}
                 className="w-full accent-black"
               />
-              <div className="flex justify-between text-xs text-gray-400 mt-0.5">
+              <div className="flex justify-between text-sm text-black mt-0.5">
                 <span>1s</span>
                 <span>10s</span>
               </div>
@@ -165,12 +240,12 @@ export default function App() {
 
             {/* reference audio */}
             <div>
-              <label className="block text-xs text-gray-500 mb-1">
+              <label className="block text-sm text-black mb-1">
                 reference audio{" "}
-                <span className="text-gray-400">(optional, for voice cloning)</span>
+                <span>(optional, for voice cloning)</span>
               </label>
               <div className="flex items-center gap-2">
-                <label className="text-xs border border-gray-300 px-3 py-1.5 cursor-pointer hover:bg-gray-50">
+                <label className="text-sm border border-black px-3 py-1.5 cursor-pointer hover:bg-gray-100">
                   {refAudio ? refAudio.name : "choose file"}
                   <input
                     type="file"
@@ -182,7 +257,7 @@ export default function App() {
                 {refAudio && (
                   <button
                     onClick={() => setRefAudio(null)}
-                    className="text-xs text-gray-400 hover:text-black"
+                    className="text-sm text-black underline"
                   >
                     clear
                   </button>
@@ -201,15 +276,15 @@ export default function App() {
 
             {/* error */}
             {error && (
-              <p className="text-xs text-red-600 bg-red-50 border border-red-200 px-3 py-2">
+              <p className="text-sm text-red-600 bg-red-50 border border-red-200 px-3 py-2">
                 {error}
               </p>
             )}
 
             {/* audio player */}
             {audioUrl && (
-              <div className="border border-gray-200 p-4 space-y-3">
-                <p className="text-xs text-gray-500">output</p>
+              <div className="border border-black p-4 space-y-3">
+                <p className="text-sm text-black">output</p>
                 <audio
                   ref={audioRef}
                   src={audioUrl}
@@ -220,15 +295,15 @@ export default function App() {
                 <a
                   href={audioUrl}
                   download="smalltts-output.wav"
-                  className="inline-block text-xs border border-gray-300 px-3 py-1.5 hover:bg-gray-50"
+                  className="inline-block text-sm border border-black px-3 py-1.5 hover:bg-gray-100"
                 >
                   download wav
                 </a>
               </div>
             )}
 
-            <p className="text-xs text-gray-400 mt-4">
-              powered by x402. $0.05/min of audio. payment in USDC on Base.
+            <p className="text-sm text-black mt-4">
+              powered by x402
             </p>
           </div>
         )}
