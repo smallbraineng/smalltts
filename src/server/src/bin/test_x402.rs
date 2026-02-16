@@ -7,23 +7,21 @@ use x402_reqwest::{ReqwestWithPayments, ReqwestWithPaymentsBuild, X402Client};
 
 const DEFAULT_SERVER: &str = "https://smalltts-service.smallbrain.xyz";
 
-fn sine_wav(duration_sec: f32, sample_rate: u32) -> Vec<u8> {
-    let n = (duration_sec * sample_rate as f32) as usize;
-    let mut buf = std::io::Cursor::new(Vec::new());
-    let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let mut w = hound::WavWriter::new(&mut buf, spec).unwrap();
-    for i in 0..n {
-        let t = i as f32 / sample_rate as f32;
-        let s = (2.0 * std::f32::consts::PI * 440.0 * t).sin();
-        w.write_sample((s * i16::MAX as f32) as i16).unwrap();
-    }
-    w.finalize().unwrap();
-    buf.into_inner()
+fn speech_wav() -> Vec<u8> {
+    let output = std::process::Command::new("espeak")
+        .args([
+            "This is a reference voice for cloning.",
+            "-w",
+            "/tmp/smalltts_ref.wav",
+        ])
+        .output()
+        .expect("espeak not found -- install with: brew install espeak / apt install espeak");
+    assert!(
+        output.status.success(),
+        "espeak failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::read("/tmp/smalltts_ref.wav").expect("failed to read espeak output")
 }
 
 fn build_multipart(wav: &[u8], text: &str) -> (String, Vec<u8>) {
@@ -53,11 +51,8 @@ fn build_multipart(wav: &[u8], text: &str) -> (String, Vec<u8>) {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                "warn,x402_reqwest=debug,x402_chain_eip155=debug"
-                    .parse()
-                    .unwrap()
-            }),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "warn".parse().unwrap()),
         )
         .init();
 
@@ -65,12 +60,16 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("PRIVATE_KEY").expect("PRIVATE_KEY env var required (hex-encoded)");
     let server = std::env::var("SERVER_URL").unwrap_or_else(|_| DEFAULT_SERVER.to_string());
     let duration: f64 = std::env::var("DURATION")
-        .unwrap_or_else(|_| "2.0".to_string())
+        .unwrap_or_else(|_| "3.0".to_string())
         .parse()
         .expect("DURATION must be a number");
+    let text = std::env::var("TEXT").unwrap_or_else(|_| {
+        "Hello world, this is a test of the x402 payment protocol.".to_string()
+    });
 
     println!("server:   {server}");
     println!("duration: {duration}s");
+    println!("text:     {text}");
 
     let signer: Arc<PrivateKeySigner> = Arc::new(private_key.parse()?);
     println!("wallet:   {:?}", signer.address());
@@ -81,11 +80,15 @@ async fn main() -> anyhow::Result<()> {
 
     let client = reqwest::Client::new().with_payments(x402).build();
 
-    let wav = sine_wav(1.0, 24_000);
-    let (content_type, body) = build_multipart(
-        &wav,
-        "Hello world, this is a test of the x402 payment protocol.",
-    );
+    let wav = if let Ok(path) = std::env::var("REF_WAV") {
+        println!("ref:      {path}");
+        std::fs::read(&path)?
+    } else {
+        println!("ref:      espeak (generated)");
+        speech_wav()
+    };
+
+    let (content_type, body) = build_multipart(&wav, &text);
 
     let url = format!("{server}/synthesize?duration={duration}");
     println!("POST {url}");
@@ -102,15 +105,6 @@ async fn main() -> anyhow::Result<()> {
     println!("status:   {}", resp.status());
     println!("elapsed:  {:.1}s", elapsed.as_secs_f64());
 
-    for (k, v) in resp.headers() {
-        if k.as_str().starts_with("x402")
-            || k.as_str().starts_with("payment")
-            || k.as_str() == "x-error"
-        {
-            println!("header:   {k}: {}", v.to_str().unwrap_or("<binary>"));
-        }
-    }
-
     if resp.status().is_success() {
         let bytes = resp.bytes().await?;
         println!("response: {} bytes", bytes.len());
@@ -121,7 +115,6 @@ async fn main() -> anyhow::Result<()> {
         if !body.is_empty() {
             eprintln!("body:     {body}");
         }
-
         eprintln!("hint:     check that wallet has USDC on Base (eip155:8453)");
     }
 

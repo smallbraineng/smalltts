@@ -28,7 +28,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 symphonia = { version = "0.5", features = ["all"] }
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.6", features = ["limit"] }
+tower-http = { version = "0.6", features = ["cors", "limit"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 x402-axum = "1.1"

@@ -10,6 +10,7 @@ use axum::{
 };
 use serde::Deserialize;
 use tokio::sync::Mutex;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tracing_subscriber::EnvFilter;
 use x402_axum::X402Middleware;
@@ -78,6 +79,13 @@ async fn main() -> Result<()> {
             )),
         )
         .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any)
+                .expose_headers(Any),
+        )
         .with_state(state);
 
     let addr = format!("0.0.0.0:{port}");

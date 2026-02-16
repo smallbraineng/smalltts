@@ -60,16 +60,21 @@ uv run python src/scripts/infer/clone.py \
 
 ## benchmarks
 
-| hardware | batch | RTF | runtime |
-| --- | ---: | ---: | --- |
-| nvidia t4 | 1 | 0.02 | onnx + cuda |
-| nvidia t4 | 16 | 0.004 | onnx + cuda |
+nvidia t4, rust onnx server, cuda execution provider:
+
+| duration | batch=1 | batch=2 | batch=4 | batch=8 |
+| ---: | ---: | ---: | ---: | ---: |
+| 2s | 166.5ms (0.083x) | 332.0ms (0.083x) | 666.0ms (0.083x) | 1333.1ms (0.083x) |
+| 5s | 217.7ms (0.043x) | 434.8ms (0.043x) | 873.9ms (0.043x) | 1752.6ms (0.043x) |
+| 10s | 315.2ms (0.032x) | 627.4ms (0.031x) | 1267.0ms (0.032x) | 2537.5ms (0.032x) |
+
+RTF scales linearly with batch size. run `cargo run --release --bin bench` in `src/server/` to benchmark on your hardware.
 
 ## fine-tune or train your own
 
 ### papers (context)
 
-[dmd2](https://arxiv.org/abs/2405.14867) · [dmdspeech](https://arxiv.org/abs/2410.11097) · [f5‑tts](https://arxiv.org/abs/2410.06885)
+[dmd2](https://arxiv.org/abs/2405.14867) · [dmdspeech](https://arxiv.org/abs/2410.11097) · [f5‑tts](https://arxiv.org/abs/2410.06885) · [echo tts](https://jordandare.github.io/blog/2025/echo/)
 
 checkpoints live on huggingface: [smallbraineng/smalltts](https://huggingface.co/smallbraineng/smalltts).
 
@@ -92,8 +97,24 @@ from-scratch training order, in `src/scripts/train`:
 - teacher is a diffusion tts model generating audio in 128 sampling steps
 - we train on encoded latents, not audio/mels. [microsoft vibevoice](https://github.com/microsoft/VibeVoice) encoder/decoder gives ~3200x compression
 - we distill to 4 steps with distribution matching distillation ([dmd2 paper](https://arxiv.org/abs/2405.14867))
-- inspired by [dmdspeech](https://arxiv.org/abs/2410.11097) and [dmospeech2](https://arxiv.org/abs/2507.14988)
+- inspired by [dmdspeech](https://arxiv.org/abs/2410.11097), [dmospeech2](https://arxiv.org/abs/2507.14988), and [echo tts](https://jordandare.github.io/blog/2025/echo/)
 - during distillation we train an asr and a speaker verification model to keep phonemes and style aligned
+- no cfg at inference -- guidance is distilled out
+
+### architecture
+- **dit backbone**: 12 blocks, hidden_dim=960, joint attention (self + cross to ref and text)
+- **text encoder**: 8-layer transformer, dim=512, 4 heads, RoPE, RMSNorm
+- **style encoder**: 12-layer transformer, dim=512, patch_size=1, learnable scale
+- **codec**: 64-dim vibevoice latents, hop=3200 (~7.5 frames/sec at 24kHz)
+- **distillation**: 128 teacher steps -> 4 student steps via dmd2
+
+### notes
+
+- joint attention over self + reference audio + text in every layer, single fused sdpa call
+- 128-step teacher distilled to 4 steps via dmd2, no cfg at inference
+- diffusion on 64-dim vibevoice codec latents (~7.5 frames/sec), not mels
+- per-block cross-kv projections, precomputed once across all denoiser steps
+- 23 built-in spontaneous event tokens: [laughter], [cough], [groan], ...
 
 ### data
 - the default dataloader is dummy. bring your own
@@ -102,15 +123,34 @@ from-scratch training order, in `src/scripts/train`:
 
 ## inference
 
-use onnx exports for production inference, download from huggingface, see `src/scripts/infer/` for examples
+use onnx exports for production inference. models download automatically from huggingface on first run.
 
-| model | download |
+| model | path |
 | --- | --- |
-| end‑to‑end model | [assets/e2e](https://huggingface.co/smallbraineng/smalltts/tree/main/assets/e2e) |
-| length predictor | [assets/length](https://huggingface.co/smallbraineng/smalltts/tree/main/assets/length) |
-| codec (encoder/decoder) | [assets/codec](https://huggingface.co/smallbraineng/smalltts/tree/main/assets/codec) |
+| condition encoder | [assets/dmd/condition_encoder.onnx](https://huggingface.co/smallbraineng/smalltts/tree/main/dmd) |
+| denoiser (4 steps) | [assets/dmd/denoiser.onnx](https://huggingface.co/smallbraineng/smalltts/tree/main/dmd) |
+| codec encoder | [assets/codec/encoder.onnx](https://huggingface.co/smallbraineng/smalltts/tree/main/codec) |
+| codec decoder | [assets/codec/decoder.onnx](https://huggingface.co/smallbraineng/smalltts/tree/main/codec) |
 
-see `src/smalltts/infer/onnx.py` for the simplest api, or just use the scripts above.
+see `src/smalltts/infer/onnx.py` for the python api, or use the scripts above.
+
+## server
+
+a rust inference server lives in `src/server/`. uses axum + onnx runtime, with [x402](https://x402.org) payment gating.
+
+```bash
+cd src/server
+PAYMENT_ADDRESS=0x... cargo run --release
+```
+
+endpoint: `POST /synthesize?duration=N` with multipart form (audio + text). returns audio/wav. gated by x402 -- clients pay $0.05/min of generated audio in USDC on Base.
+
+a web frontend lives in `src/website/` (vite + react + privy for wallet connection).
+
+```bash
+cd src/website
+bun install && bun run dev
+```
 
 ## roadmap
 
@@ -131,7 +171,7 @@ model weights on huggingface are licensed CC‑BY‑NA.
 
 ## citations
 
-thanks to the authors and communities of dmdspeech, nanospeech, f5‑tts, and vibevoice — this repo is heavily inspired by their ideas and codebases.
+thanks to the authors and communities of dmdspeech, nanospeech, f5‑tts, echo tts, and vibevoice — this repo is heavily inspired by their ideas and codebases.
 
 ```bibtex
 @article{peng2025vibevoice,
@@ -206,6 +246,13 @@ thanks to the authors and communities of dmdspeech, nanospeech, f5‑tts, and vi
     primaryClass  = {eess.AS},
     doi           = {10.48550/arXiv.2406.18009},
     url           = {https://arxiv.org/abs/2406.18009}
+}
+
+@misc{darefsky2025echo,
+    title        = {Echo: Diffusion-based text-to-speech with fast, high-fidelity voice cloning},
+    author       = {Jordan Darefsky},
+    year         = {2025},
+    howpublished = {\url{https://jordandare.github.io/blog/2025/echo/}}
 }
 
 @article{zhu2025zipvoice,
