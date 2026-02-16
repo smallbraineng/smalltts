@@ -32,7 +32,7 @@ async fn main() -> Result<()> {
         .init();
 
     let facilitator_url = std::env::var("FACILITATOR_URL")
-        .unwrap_or_else(|_| "https://facilitator.x402.rs".to_string());
+        .unwrap_or_else(|_| "https://pay.openfacilitator.io".to_string());
     let payment_address: Address = std::env::var("PAYMENT_ADDRESS")
         .unwrap_or_else(|_| "0xBAc675C310721717Cd4A37F6cbeA1F081b1C2a07".to_string())
         .parse()
