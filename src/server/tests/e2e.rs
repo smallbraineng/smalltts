@@ -8,7 +8,7 @@ use x402_types::networks::USDC;
 
 const PAYMENT_ADDRESS: alloy_primitives::Address =
     address!("0xBAc675C310721717Cd4A37F6cbeA1F081b1C2a07");
-const RATE_PER_SECOND: u64 = 833;
+const RATE_PER_SECOND: u64 = 167;
 
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
@@ -233,8 +233,8 @@ async fn test_price_scales_with_duration() {
         .unwrap();
     let amount_5s = parse_amount(resp.headers());
 
-    assert_eq!(amount_1s, RATE_PER_SECOND); // 1s = 5000
-    assert_eq!(amount_5s, 5 * RATE_PER_SECOND); // 5s = 25000
+    assert_eq!(amount_1s, RATE_PER_SECOND); // 1s = 167
+    assert_eq!(amount_5s, 5 * RATE_PER_SECOND); // 5s = 835
     assert!(amount_5s > amount_1s);
 }
 
