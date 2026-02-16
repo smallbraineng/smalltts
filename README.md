@@ -58,6 +58,98 @@ uv run python src/scripts/infer/clone.py \
   --text "what you want it to say"
 ```
 
+## audio samples
+
+these sample pairs were copied from:
+
+`../dmdspeech/test_outputs/quality_pairs_20260216_123313`
+
+repo path:
+
+`readme_samples/quality_pairs_20260216_123313`
+
+if your markdown client does not render inline players, use the direct `.wav` links under each sample.
+
+### sample 02 - pony (laughter prompt)
+
+prompt text:
+
+`that joke is good [laughter] [laughter] and i cannot stop laughing.`
+
+original
+
+<audio controls preload="none" src="readme_samples/quality_pairs_20260216_123313/sample_02_pony_laughter/original.wav"></audio>
+
+generated
+
+<audio controls preload="none" src="readme_samples/quality_pairs_20260216_123313/sample_02_pony_laughter/generated.wav"></audio>
+
+links: [original.wav](readme_samples/quality_pairs_20260216_123313/sample_02_pony_laughter/original.wav) · [generated.wav](readme_samples/quality_pairs_20260216_123313/sample_02_pony_laughter/generated.wav)
+
+### sample 06 - genshin voice (plain announcement)
+
+prompt text:
+
+`new episodes drop every friday at nine in the evening.`
+
+original
+
+<audio controls preload="none" src="readme_samples/quality_pairs_20260216_123313/sample_06_genshin_voice_plain_announcement/original.wav"></audio>
+
+generated
+
+<audio controls preload="none" src="readme_samples/quality_pairs_20260216_123313/sample_06_genshin_voice_plain_announcement/generated.wav"></audio>
+
+links: [original.wav](readme_samples/quality_pairs_20260216_123313/sample_06_genshin_voice_plain_announcement/original.wav) · [generated.wav](readme_samples/quality_pairs_20260216_123313/sample_06_genshin_voice_plain_announcement/generated.wav)
+
+### sample 07 - genshin voice (gasp then laughter)
+
+prompt text:
+
+`wow [gasp] i did not expect that [laughter].`
+
+original
+
+<audio controls preload="none" src="readme_samples/quality_pairs_20260216_123313/sample_07_genshin_voice_gasp_then_laugh/original.wav"></audio>
+
+generated
+
+<audio controls preload="none" src="readme_samples/quality_pairs_20260216_123313/sample_07_genshin_voice_gasp_then_laugh/generated.wav"></audio>
+
+links: [original.wav](readme_samples/quality_pairs_20260216_123313/sample_07_genshin_voice_gasp_then_laugh/original.wav) · [generated.wav](readme_samples/quality_pairs_20260216_123313/sample_07_genshin_voice_gasp_then_laugh/generated.wav)
+
+### sample 08 - pony (sniff prompt)
+
+prompt text:
+
+`i think i am getting a cold [sniff] [sniff].`
+
+original
+
+<audio controls preload="none" src="readme_samples/quality_pairs_20260216_123313/sample_08_pony_sniff/original.wav"></audio>
+
+generated
+
+<audio controls preload="none" src="readme_samples/quality_pairs_20260216_123313/sample_08_pony_sniff/generated.wav"></audio>
+
+links: [original.wav](readme_samples/quality_pairs_20260216_123313/sample_08_pony_sniff/original.wav) · [generated.wav](readme_samples/quality_pairs_20260216_123313/sample_08_pony_sniff/generated.wav)
+
+### sample 10 - genshin voice (mixed events)
+
+prompt text:
+
+`okay [cough] that was rough [sigh] but we are still going.`
+
+original
+
+<audio controls preload="none" src="readme_samples/quality_pairs_20260216_123313/sample_10_genshin_voice_mixed_events/original.wav"></audio>
+
+generated
+
+<audio controls preload="none" src="readme_samples/quality_pairs_20260216_123313/sample_10_genshin_voice_mixed_events/generated.wav"></audio>
+
+links: [original.wav](readme_samples/quality_pairs_20260216_123313/sample_10_genshin_voice_mixed_events/original.wav) · [generated.wav](readme_samples/quality_pairs_20260216_123313/sample_10_genshin_voice_mixed_events/generated.wav)
+
 ## benchmarks
 
 nvidia t4, rust onnx server, cuda execution provider:

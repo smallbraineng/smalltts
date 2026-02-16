@@ -1,0 +1,18 @@
+{
+  "sample_index": 10,
+  "dataset": "genshin-voice",
+  "source_text": "Hmm, those do sound refreshing, but the popsicles aren't sweet.",
+  "prompt_id": "mixed_events",
+  "generated_text": "okay [cough] that was rough [sigh] but we are still going.",
+  "nonverbal_prompt": true,
+  "seed": 20260226,
+  "num_steps": 4,
+  "latents_length": 39,
+  "ref_latents_length": 79,
+  "speaker_id": "Chongyun",
+  "ref_speaker_id": "Chongyun",
+  "source_url": "",
+  "source_key": "",
+  "original_path": "test_outputs/quality_pairs_20260216_123313/sample_10_genshin_voice_mixed_events/original.wav",
+  "generated_path": "test_outputs/quality_pairs_20260216_123313/sample_10_genshin_voice_mixed_events/generated.wav"
+}

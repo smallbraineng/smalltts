@@ -1,0 +1,18 @@
+{
+  "sample_index": 2,
+  "dataset": "pony",
+  "source_text": "You know her whacky, wompy thing the snail!",
+  "prompt_id": "laughter",
+  "generated_text": "that joke is good [laughter] [laughter] and i cannot stop laughing.",
+  "nonverbal_prompt": true,
+  "seed": 20260218,
+  "num_steps": 4,
+  "latents_length": 17,
+  "ref_latents_length": 18,
+  "speaker_id": "Spike",
+  "ref_speaker_id": "Spike",
+  "source_url": "",
+  "source_key": "",
+  "original_path": "test_outputs/quality_pairs_20260216_123313/sample_02_pony_laughter/original.wav",
+  "generated_path": "test_outputs/quality_pairs_20260216_123313/sample_02_pony_laughter/generated.wav"
+}
